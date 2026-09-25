@@ -204,12 +204,14 @@ class AxisProblem:
                 k = min(4, len(samples))
                 Q.append((App / k, Add / k, Apd / k))
             self.noise_Q = np.array(Q)
+            self.noise_scale = np.array([thrust_linear_slope(tune.i("thrust_linear"), b.throttle) for b in nm.bands])
 
     def noise(self, kp: float, kd: float) -> np.ndarray:
+        """HF noise at the motors per noise band (pidSum units x thrust_linear slope)."""
         if self.noise_Q is None:
             return np.zeros(1)
         App, Add, Apd = self.noise_Q.T
-        return np.sqrt(np.maximum(kp * kp * App + kd * kd * Add + 2 * kp * kd * Apd, 0))
+        return np.sqrt(np.maximum(kp * kp * App + kd * kd * Add + 2 * kp * kd * Apd, 0)) * self.noise_scale
 
     def evaluate(self, P: float, I: float, D: float, dmax_ratio: float, detail: bool = False):
         from ..analysis.loop import metrics
@@ -332,6 +334,9 @@ def candidate_moves(t: Tune) -> list[tuple[str, dict]]:
         moves.append(("tpa_mode PD", {"tpa_mode": "PD"}))
     else:
         moves.append(("tpa_mode D", {"tpa_mode": "D"}))
+    for tl in (0, 20, 40, 60):
+        if tl != t.i("thrust_linear"):
+            moves.append((f"thrust_linear {tl}", {"thrust_linear": tl}))
     g1min = t.i("gyro_lpf1_dyn_min_hz")
     g1on = g1min > 0 or t.i("gyro_lpf1_static_hz") > 0
     if g1on:

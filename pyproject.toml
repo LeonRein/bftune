@@ -1,7 +1,10 @@
 [project]
 name = "bftune"
 version = "0.1.0"
-description = "Add your description here"
+description = "Model-based Betaflight tuning: blackbox chirp system identification, alias-aware noise model and robust PID/filter optimization"
+license = "GPL-3.0-or-later"
+authors = [{ name = "LeonRein" }]
+keywords = ["betaflight", "fpv", "drone", "pid", "tuning", "blackbox", "system-identification"]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -19,3 +22,12 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.9",
 ]
+
+[project.scripts]
+bftune = "bftune.cli:main"
+
+[tool.ruff]
+line-length = 120
+
+[tool.pytest.ini_options]
+markers = ["slow: long-running synthetic end-to-end tests"]
