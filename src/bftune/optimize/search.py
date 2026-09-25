@@ -17,13 +17,12 @@ Structure
 from __future__ import annotations
 
 import copy
-import math
 from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.optimize import differential_evolution
 
-from ..flight import AXES, Flight
+from ..flight import AXES, FlightSummary
 from ..model import filters as flt
 from ..model.controller import OperatingPoint, controller_fr
 from ..model.params import DTERM_SCALE, ITERM_SCALE, PTERM_SCALE, Tune, thrust_linear_slope
@@ -100,29 +99,12 @@ class SearchResult:
     history: list[tuple[str, float]]
 
 
-def motor_hz_for_throttle(fl: Flight, thr: float) -> np.ndarray:
-    """Median motor speed at a mixer throttle, from the log (extrapolated if unseen)."""
-    armed = fl.mode(0)
-    m = armed & (np.abs(fl.throttle - thr) < 0.04)
-    if m.sum() > 100:
-        return np.median(fl.motor_hz[m], axis=0)
-    # extrapolate using thrust ∝ omega^2 ~ throttle + hover offset
-    ok = armed & (fl.throttle > 0.05)
-    t, h = fl.throttle[ok], fl.motor_hz[ok].mean(axis=1)
-    coef = np.polyfit(t, h**2, 1)
-    hz = math.sqrt(max(np.polyval(coef, thr), 1.0))
-    return np.full(fl.motor_hz.shape[1], hz)
+def idle_motor_hz(src: FlightSummary, tune: Tune) -> float:
+    """Idle motor speed: 20th percentile of natural idle, or the dyn_idle floor if higher."""
+    return max(src.idle_hz(20), tune.i("dyn_idle_min_rpm") * 100 / 60.0)
 
 
-def idle_motor_hz(fl: Flight, tune: Tune) -> float:
-    armed = fl.mode(0)
-    low = armed & (fl.throttle < 0.03)
-    base = float(np.percentile(fl.motor_hz[low].mean(axis=1), 20)) if low.sum() > 100 else 60.0
-    dyn = tune.i("dyn_idle_min_rpm") * 100 / 60.0
-    return max(base, dyn)
-
-
-def build_cases(fl: Flight, idn: Identification, tune: Tune, axis: int, goals: Goals) -> list[Case]:
+def build_cases(fl: FlightSummary, idn: Identification, tune: Tune, axis: int, goals: Goals) -> list[Case]:
     ai = idn.axes[axis]
     cases: list[Case] = []
     thr_id = ai.op.throttle
@@ -133,7 +115,7 @@ def build_cases(fl: Flight, idn: Identification, tune: Tune, axis: int, goals: G
         elif label == "hover":
             mhz = np.array(ai.op.motor_hz)
         else:
-            mhz = motor_hz_for_throttle(fl, thr)
+            mhz = fl.motor_hz_at(thr)
         base = ai.plant.scaled(float(np.mean(mhz)), ai.op.vbat, idn.motor)
         dn = ai.op.dyn_notch_hz
         for boost in (0.0, 1.0):
@@ -234,6 +216,7 @@ class AxisProblem:
         wsum = 0.0
         rows = []
         worst = {"pm": 999.0, "gm": 999.0, "ms": 0.0, "dm": 999.0}
+        worst_case = {"pm": "", "gm": "", "ms": ""}
         fc_nom = []
         for c, (gp, gi, gd), (rp, ri) in zip(self.cases, self.B, self.R):
             kd_eff = kd * (1 + c.op.d_boost * (dmax_ratio - 1))
@@ -264,9 +247,12 @@ class AxisProblem:
                 wsum += c.weight
                 if np.isfinite(M.fc):
                     fc_nom.append(M.fc)
-            worst["pm"] = min(worst["pm"], pm)
-            worst["gm"] = min(worst["gm"], M.gm_db)
-            worst["ms"] = max(worst["ms"], M.ms)
+            if pm < worst["pm"]:
+                worst["pm"], worst_case["pm"] = pm, c.label
+            if M.gm_db < worst["gm"]:
+                worst["gm"], worst_case["gm"] = M.gm_db, c.label
+            if M.ms > worst["ms"]:
+                worst["ms"], worst_case["ms"] = M.ms, c.label
             if not c.robust:
                 worst["dm"] = min(worst["dm"], M.dm_ms)
             if detail:
@@ -282,6 +268,7 @@ class AxisProblem:
             penalty += 2000 * max(0.0, nr - 0.97 * g.noise_budget) ** 2
         total = obj + penalty
         if detail:
+            self.worst_case = worst_case
             return total, obj, penalty, worst, nr, rows
         return total
 
@@ -535,5 +522,5 @@ def violations(rows: list[dict], goals: Goals, noise_ratio: float | None = None)
         if bad:
             out.append(f"{r['case']}: " + ", ".join(bad))
     if noise_ratio is not None and noise_ratio > goals.noise_budget * 1.02:
-        out.append(f"motor noise {noise_ratio:.2f}x budget")
+        out.append(f"motor noise {noise_ratio:.2f}x proven-safe level (limit {goals.noise_budget:.2f}x)")
     return out

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..analysis.loop import rc_smoothing_cutoff, step_metrics, step_response
-from ..flight import AXES, Flight
+from ..flight import AXES, FlightSummary
 from ..model.controller import OperatingPoint
 from ..model.params import FEEDFORWARD_SCALE, Tune, thrust_linear_slope
 from ..sysid.identify import Identification
@@ -23,12 +23,12 @@ class Decision:
     reason: str
 
 
-def rx_rate_hz(fl: Flight) -> float:
-    v = fl.log.header_int("rc_smoothing_rx_smoothed", 0) or 0
+def rx_rate_hz(fl: FlightSummary) -> float:
+    v = fl.header_int("rc_smoothing_rx_smoothed", 0) or 0
     return float(v) if v > 0 else 250.0
 
 
-def max_rate(fl: Flight, axis: int) -> float:
+def max_rate(fl: FlightSummary, axis: int) -> float:
     """Max stick rate [deg/s] from the rate profile (ACTUAL rates; conservative fallback 670)."""
     ax = AXES[axis]
     c = fl.cfg
@@ -37,7 +37,7 @@ def max_rate(fl: Flight, axis: int) -> float:
     return 670.0
 
 
-def tune_feedforward(fl: Flight, idn: Identification, tune: Tune, style: str = "freestyle",
+def tune_feedforward(fl: FlightSummary, idn: Identification, tune: Tune, style: str = "freestyle",
                      overshoot_max: float | None = None) -> list[Decision]:
     """Pick F per axis: minimum tracking lag for a fast stick move without exceeding the
     overshoot target. Evaluated with the identified plant (I relaxed, D at d_max, as in flight).
@@ -90,7 +90,7 @@ def tune_feedforward(fl: Flight, idn: Identification, tune: Tune, style: str = "
     return out
 
 
-def judgement(fl: Flight, idn: Identification, tune: Tune, style: str = "freestyle") -> list[Decision]:
+def judgement(fl: FlightSummary, idn: Identification, tune: Tune, style: str = "freestyle") -> list[Decision]:
     """Link- and flight-style dependent settings (RC smoothing, idle, I-term details)."""
     out: list[Decision] = []
     rx = rx_rate_hz(fl)
@@ -107,10 +107,8 @@ def judgement(fl: Flight, idn: Identification, tune: Tune, style: str = "freesty
                             f"{rx:.0f} Hz link: setpoint/FF smoothing cutoff {c_old:.0f}→{c_new:.0f} Hz, stick latency "
                             f"{d_old:.1f}→{d_new:.1f} ms"))
     # Dynamic idle: keep a speed floor in dives/propwash (authority and desync protection).
-    armed = fl.mode(0)
-    low = armed & (fl.throttle < 0.03)
-    if fl.motor_hz is not None and low.sum() > 200:
-        idle_hz = float(np.percentile(fl.motor_hz[low].mean(axis=1), 25))
+    if 25 in fl.idle_q:
+        idle_hz = fl.idle_hz(25)
         rpm = idle_hz * 60.0
         val = int(np.clip(round(0.9 * rpm / 100), 20, 120))
         if tune.i("dyn_idle_min_rpm") == 0 or abs(tune.i("dyn_idle_min_rpm") - val) > 5:

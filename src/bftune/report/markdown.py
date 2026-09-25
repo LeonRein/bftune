@@ -62,32 +62,38 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
     L.append("")
     L.append("## Current vs new (model predictions)")
     L.append("")
-    L.append("| axis | tune | hover crossover | hover PM | hover GM | hover Ms | idle crossover | full-throttle PM | worst PM (all cases) | worst Ms | noise vs proven-safe |")
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|")
-    for name, per in result["evaluation"].items():
-        for ax, e in per.items():
+    if result.get("method"):
+        L.append(f"Method: {result['method']}.")
+        L.append("")
+    L.append("| axis | tune | verdict | hover crossover | hover PM | hover Ms | idle crossover | idle Ms | full-throttle PM | worst PM | worst Ms | noise vs proven-safe | stick flick lag / overshoot |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    for name, a in result["assessment"].items():
+        for ax, e in a["axes"].items():
             h, i, fu, w = e["hover"], e["idle"], e["full"], e["worst"]
-            nb = _f(e["noise_vs_budget"], "{:.2f}") if result.get("noise_model", True) else "n/a"
-            L.append(f"| {ax} | {name} | {_f(h['fc'])} Hz | {_f(h['pm'], '{:.0f}')}° | {_f(h['gm_db'])} dB | {_f(h['ms'], '{:.2f}')} | "
-                     f"{_f(i['fc'])} Hz | {_f(fu['pm'], '{:.0f}')}° | {_f(w['pm'], '{:.0f}')}° | {_f(w['ms'], '{:.2f}')} | "
-                     f"{nb} |")
+            nb = _f(e.get("noise_vs_safe"), "{:.2f}") if result.get("noise_model", True) else "n/a"
+            st = e.get("step", {}).get("flick")
+            stt = f"{st['tracking_lag_ms']:.1f} ms / {st['overshoot_pct']:.0f}%" if st else "—"
+            L.append(f"| {ax} | {name} | {a['verdict']} | {_f(h['fc'])} Hz | {_f(h['pm'], '{:.0f}')}° | {_f(h['ms'], '{:.2f}')} | "
+                     f"{_f(i['fc'])} Hz | {_f(i['ms'], '{:.2f}')} | {_f(fu['pm'], '{:.0f}')}° | {_f(w['pm'], '{:.0f}')}° | "
+                     f"{_f(w['ms'], '{:.2f}')} | {nb} | {stt} |")
     L.append("")
-    st = result.get("step", {})
-    if st:
-        L.append("Stick flick 300°/s in 50 ms (model, with feedforward):")
+    notes = result["assessment"].get("new", {}).get("notes", [])
+    if notes:
+        L += [f"- note: {n}" for n in notes]
         L.append("")
-        L.append("| axis | tune | tracking lag | overshoot | settle (5%) |")
-        L.append("|---|---|---|---|---|")
-        for k, m in st.items():
-            ax, lab = k.split("/")
-            L.append(f"| {ax} | {lab} | {m['tracking_lag_ms']:.1f} ms | {m['overshoot_pct']:.0f}% | {m['settle_5pct_ms']:.0f} ms |")
-        L.append("")
+    L.append("Constraints (every case: idle/hover/mid/full throttle, base D and D-max, ±10 % gain, +0.3 ms delay, "
+             "dyn notch at its minimum): PM ≥ 45° (35° in uncertainty variants), GM ≥ 6 dB (4 dB), Ms ≤ 2.0 (2.4), "
+             "motor noise ≤ 0.9× the level of a tune proven to fly with cool motors.")
+    L.append("")
     for key in ("loop", "step", "noise"):
         if key in result["plots"]:
             L.append(f"![{key}]({result['plots'][key]})")
             L.append("")
     L.append("## Changes")
     L.append("")
+    if result.get("unexplained_changes"):
+        L.append("Changes without a stated reason: " + ", ".join(result["unexplained_changes"]))
+        L.append("")
     L.append("| setting | old | new | why |")
     L.append("|---|---|---|---|")
     for c in result["changes"]:

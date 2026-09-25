@@ -166,3 +166,65 @@ def flight_from_log(log: Log, cfg: Config) -> Flight:
         debug=debug,
         mode_mask=_mode_mask_per_frame(log),
     )
+
+
+@dataclass
+class FlightSummary:
+    """The few per-flight facts the tuning tools need, cached with the analysis.
+
+    Lets `evaluate`/`sweep`/`suggest`/`emit` run in about a second without re-decoding the log.
+    """
+
+    loop_hz: float
+    fs: float
+    log_ratio: int
+    cfg: Config
+    headers: dict
+    thr_grid: np.ndarray  # throttle bin centres
+    hz_grid: np.ndarray  # (T, M) median motor Hz per bin (NaN where too little data)
+    sq_fit: np.ndarray  # polyfit(throttle, mean_hz^2, 1) for extrapolation
+    n_motors: int
+    idle_q: dict  # percentile -> idle motor Hz (armed, throttle < 3 %)
+
+    def header_int(self, key: str, default: int = 0) -> int:
+        v = self.headers.get(key)
+        try:
+            return int(str(v).split(",")[0]) if v is not None else default
+        except ValueError:
+            return default
+
+    def motor_hz_at(self, thr: float) -> np.ndarray:
+        """Median motor speed at a mixer throttle (measured bin within ±0.04, else extrapolated)."""
+        k = int(np.argmin(np.abs(self.thr_grid - thr))) if len(self.thr_grid) else -1
+        if k >= 0 and abs(self.thr_grid[k] - thr) <= 0.04 and np.all(np.isfinite(self.hz_grid[k])):
+            return self.hz_grid[k].copy()
+        hz = float(np.sqrt(max(np.polyval(self.sq_fit, thr), 1.0)))
+        return np.full(self.n_motors, hz)
+
+    def idle_hz(self, pct: int = 20) -> float:
+        return float(self.idle_q.get(pct, 60.0))
+
+
+def summarize(fl: Flight) -> FlightSummary:
+    armed = fl.mode(0)
+    grid = np.round(np.arange(0.0, 1.0001, 0.02), 2)
+    m = fl.motor_hz.shape[1] if fl.motor_hz is not None else 4
+    hz = np.full((len(grid), m), np.nan)
+    sq = np.array([0.0, 200.0**2])
+    idle_q: dict = {}
+    if fl.motor_hz is not None:
+        for i, g in enumerate(grid):
+            sel = armed & (np.abs(fl.throttle - g) < 0.04)
+            if sel.sum() > 100:
+                hz[i] = np.median(fl.motor_hz[sel], axis=0)
+        ok = armed & (fl.throttle > 0.05)
+        if ok.sum() > 10:
+            sq = np.polyfit(fl.throttle[ok], fl.motor_hz[ok].mean(axis=1) ** 2, 1)
+        low = armed & (fl.throttle < 0.03)
+        if low.sum() > 100:
+            mh = fl.motor_hz[low].mean(axis=1)
+            idle_q = {q: float(np.percentile(mh, q)) for q in (10, 20, 25, 50)}
+    return FlightSummary(
+        loop_hz=fl.loop_hz, fs=fl.fs, log_ratio=fl.log_ratio, cfg=fl.cfg, headers=dict(fl.log.headers),
+        thr_grid=grid, hz_grid=hz, sq_fit=np.asarray(sq), n_motors=m, idle_q=idle_q,
+    )
