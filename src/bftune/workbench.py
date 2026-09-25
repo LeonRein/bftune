@@ -143,7 +143,7 @@ class Workbench:
         for name, amp, ramp in (("flick", 300.0, 0.05), ("snap", min(600.0, 0.6 * max_rate(self.src, axis)), 0.03)):
             m = step_metrics(step_response(tune, axis, pl, op, self.idn.dt, self.src.loop_hz, rx, amplitude=amp,
                                            ramp_s=ramp, time_scale=self.idn.time_scale))
-            out[name] = {k: round(float(m[k]), 2) for k in ("tracking_lag_ms", "overshoot_pct", "settle_5pct_ms")}
+            out[name] = {k: round(float(m[k]), 2) for k in ("tracking_lag_ms", "stick_lag_ms", "overshoot_pct", "settle_5pct_ms")}
         return out
 
     def axis_problem(self, tune: Tune, axis: int) -> AxisProblem:
@@ -350,7 +350,8 @@ def format_assessment(ass: dict) -> str:
                 f" ({e.get('worst_case', {}).get('ms', '')}) | noise {nz} | obj {e['objective_db']:.2f} dB")
             if "step" in e:
                 s = e["step"]
-                lines.append(f"        step: flick lag {s['flick']['tracking_lag_ms']:.1f} ms ov {s['flick']['overshoot_pct']:.0f}%"
+                lines.append(f"        step: flick stick→gyro lag {s['flick']['stick_lag_ms']:.1f} ms (vs setpoint {s['flick']['tracking_lag_ms']:.1f})"
+                             f" ov {s['flick']['overshoot_pct']:.0f}%"
                              f" settle {s['flick']['settle_5pct_ms']:.0f} ms | snap lag {s['snap']['tracking_lag_ms']:.1f} ms"
                              f" ov {s['snap']['overshoot_pct']:.0f}%")
             vs = e["violations"]

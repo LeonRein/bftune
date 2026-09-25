@@ -146,11 +146,12 @@ def cmd_ff(a) -> int:
     axis = AXES.index(a.axis)
     rows = wb.ff_table(base, axis, parse_values(a.values))
     print(f"feedforward f_{a.axis}: flick = 300°/s in 50 ms, snap = fast move below the max-rate limit")
-    print(f"{'F':>5s} | {'flick lag':>9s} {'overshoot':>9s} {'settle':>7s} | {'snap lag':>8s} {'overshoot':>9s}")
+    print("lag = gyro vs smoothed setpoint; stick = gyro vs raw stick (end-to-end, includes RC smoothing)")
+    print(f"{'F':>5s} | {'flick lag':>9s} {'stick':>7s} {'overshoot':>9s} {'settle':>7s} | {'snap lag':>8s} {'stick':>7s} {'overshoot':>9s}")
     for r in rows:
         fl_, sn = r["flick"], r["snap"]
-        print(f"{r['f']:>5} | {fl_['tracking_lag_ms']:8.1f}ms {fl_['overshoot_pct']:8.0f}% {fl_['settle_5pct_ms']:6.0f}ms | "
-              f"{sn['tracking_lag_ms']:7.1f}ms {sn['overshoot_pct']:8.0f}%")
+        print(f"{r['f']:>5} | {fl_['tracking_lag_ms']:8.1f}ms {fl_['stick_lag_ms']:5.1f}ms {fl_['overshoot_pct']:8.0f}% "
+              f"{fl_['settle_5pct_ms']:6.0f}ms | {sn['tracking_lag_ms']:7.1f}ms {sn['stick_lag_ms']:5.1f}ms {sn['overshoot_pct']:8.0f}%")
     return 0
 
 

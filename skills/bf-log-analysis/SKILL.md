@@ -6,7 +6,9 @@ description: Decode and sanity-check Betaflight blackbox logs with bftune (inspe
 # Log analysis and sanity checks
 
 `bftune inspect LOG --dump dump.txt` lists sessions, chirp runs (axis, time, frequency range,
-throttle, ANGLE mode, reconstructed or not) and warnings. `bftune analyze` writes `analysis.json`.
+throttle, ANGLE mode, reconstructed or not) and warnings. `bftune analyze LOG --dump DUMP -o OUT
+[--safe-log OTHER.BFL]` writes `analysis.json` plus a cached `analysis.pkl` that the fast workbench
+uses. Add proven-safe tunes later with `bftune safe -o OUT --log X.BFL` or `--cli diff.txt`.
 
 ## What to check
 | item | where | good | action if bad |

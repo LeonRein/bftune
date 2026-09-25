@@ -186,11 +186,16 @@ def step_metrics(res: dict) -> dict:
     lags = np.arange(0, int(0.05 / (t[1] - t[0])))
     errs = [np.mean((y[k:] - sp[: len(sp) - k]) ** 2) for k in lags]
     lag = lags[int(np.argmin(errs))] * (t[1] - t[0])
+    # end-to-end latency the pilot feels: gyro vs the raw stick (includes RC smoothing)
+    stick = res["stick"]
+    errs_s = [np.mean((y[k:] - stick[: len(stick) - k]) ** 2) for k in lags]
+    stick_lag = lags[int(np.argmin(errs_s))] * (t[1] - t[0])
     return {
         "delay_50_ms": (t[i50_y] - t[i50_sp]) * 1000,
         "rise_90_ms": t[i90] * 1000,
         "overshoot_pct": overshoot,
         "settle_5pct_ms": settle * 1000,
         "tracking_lag_ms": lag * 1000,
+        "stick_lag_ms": stick_lag * 1000,
         "peak_pidsum": float(np.max(np.abs(res["pidsum"]))),
     }

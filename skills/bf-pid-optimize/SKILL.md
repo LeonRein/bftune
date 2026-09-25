@@ -1,9 +1,19 @@
 ---
 name: bf-pid-optimize
-description: Run and interpret bftune's robust PID/filter/TPA optimization - goals per flying style, operating cases (idle/hover/mid/full, battery, delay, D-max), margins (PM/GM/Ms/delay margin), feedforward rules, and when to override. Use when producing or reviewing a tune.
+description: The verdict gate and objective behind bftune's assess/sweep/suggest/emit - operating cases (idle/hover/mid/full, gain and delay variants, D-max), margins (PM/GM/Ms/delay margin), noise budget, feedforward targets, and the optional automatic optimizer baseline. Use when judging a candidate or reading assess/sweep output.
 ---
 
-# Optimization — what it does and how to judge it
+# Margins, objective and the optional optimizer
+
+`assess`, `sweep`, `suggest` and `emit` all use the same case set and limits, described below. The
+automatic `bftune optimize` (multi-start search, 10-60 min) is an optional second opinion; the main
+workflow is the `bf-tune` procedure.
+
+Reading `assess` output: `hover fc/PM/Ms`, `idle fc/Ms`, `full PM`, `worst PM (case) Ms (case)`,
+`noise Nx safe`, `obj` (lower is better: mean dB of |S| in the performance band plus the tracking
+term), and `step: flick/snap lag, overshoot, settle`. The worst-case label (e.g.
+`full/d/hiK+delay`) tells you which knob to turn: full → TPA, idle → D/thrust_linear/dyn idle,
+hover → P/D/filters, `dn@min` → dyn notch placement.
 
 **Objective:** maximize disturbance rejection (mean log|S| from 3–60 Hz for freestyle, 5–80 Hz for
 race) at hover, mid throttle and idle (propwash), plus 0.5× the feedback-only setpoint-tracking

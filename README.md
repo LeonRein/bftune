@@ -19,7 +19,8 @@ the results and write the CLI commands for you.
 4. **Noise model.** From an aliased 1-2 kHz log, reconstruct the 8 kHz gyro-noise spectrum that
    explains gyroUnfilt, gyroADC and the D term at once. This predicts motor noise for any filter/D
    combination.
-5. **Optimize** disturbance rejection (propwash, turbulence) under robust stability constraints:
+5. **Workbench** (`assess`, `sweep`, `suggest`, `ff`, `noise`, `emit`) scores any candidate in about
+   a second, so a tuner or agent can iterate. It optimizes disturbance rejection (propwash, turbulence) under robust stability constraints:
    phase margin, gain margin, peak sensitivity and delay margin across idle, hover, mid and full
    throttle, ±10 % actuator gain (battery sag, motor wear), +0.3 ms delay and D-max. Setpoint tracking
    (attitude hold) is part of the objective. The noise budget comes from tunes proven to fly
@@ -45,17 +46,24 @@ Claude Code plugin:
 
 ## Quick start
 ```bash
-bftune inspect  LOG00001.BFL --dump dump.txt
-bftune analyze  LOG00001.BFL --dump dump.txt -o out/
-bftune optimize -o out/ --style freestyle --safe-log OLD_TUNE.BFL   # optional: a tune that flew with cool motors
-# -> out/tune_cli.txt, out/revert_cli.txt, out/report.md, plots
-bftune evaluate -o out/ my_hand_edits.txt                         # score any CLI changes on the model
-bftune all LOG00001.BFL --dump dump.txt -o out/                   # analyze + optimize in one go
-bftune synth 5inch -o twin.pkl --truth                            # synthetic test flight with known truth
+bftune inspect  LOG.BFL --dump dump.txt
+bftune analyze  LOG.BFL --dump dump.txt -o out/ --safe-log OLD_TUNE.BFL   # once, ~10-20 s
+bftune candidate -o out/ cand.txt            # editable tune file (starts as the logged tune)
+bftune assess   -o out/ cand.txt --with-current --with-safe   # verdict + margins + step + noise (~1 s)
+bftune noise    -o out/ cand.txt             # filter decisions: noise per band, non-RPM peaks
+bftune sweep    -o out/ cand.txt d_roll 20:50:5              # tradeoff table for one setting
+bftune suggest  -o out/ cand.txt             # per-axis P/I/D proposal (everything else fixed)
+bftune ff       -o out/ cand.txt --axis roll # feedforward: lag vs overshoot
+bftune emit     -o out/ cand.txt             # CLI + revert block + report (exit 2 if the verdict FAILs)
+bftune optimize -o out_copy/                 # optional automatic baseline (slow)
+bftune synth 5inch -o twin.pkl --truth       # synthetic test flight with known truth
 ```
-`optimize` prints a **VERDICT** (PASS/FAIL of every robustness constraint). Never fly a FAIL tune
-without understanding the listed violations. `analysis.pkl`/synthetic `.pkl` files are Python pickles:
-only load files you created yourself.
+The intended loop is **hypothesis → edit `cand.txt` → assess/sweep → adjust**, driven by a person or by
+the `tuning-engineer` agent following the step-by-step procedure in
+[skills/bf-tune/SKILL.md](skills/bf-tune/SKILL.md). The numerics are scripts; the decisions stay
+explainable. Every emitted tune must pass the same deterministic **verdict** (PASS/FAIL of every
+robustness constraint). `analysis.pkl` and synthetic `.pkl` files are Python pickles, so only load
+files you created yourself.
 
 ## Recording the flight (summary)
 Firmware 2026.6+ with `USE_CHIRP`, a CHIRP mode switch and `set debug_mode = CHIRP`. Hover in

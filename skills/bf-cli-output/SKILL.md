@@ -5,7 +5,10 @@ description: Deliver a Betaflight tune safely - CLI block with simplified-tuning
 
 # Delivering the tune
 
-1. Use `out/tune_cli.txt` as the base. It already contains:
+1. `bftune emit -o OUT cand.txt` writes `tune_cli.txt`, `revert_cli.txt`, `report.md`, `tune.json` and
+   plots. An exit code of 2 means the verdict is FAIL, so do not deliver. The `# reason` comments in the
+   candidate file become the report's "why" column; `emit` lists changes that have no reason.
+   `tune_cli.txt` already contains:
    - `set simplified_pids_mode/dterm_filter/gyro_filter = OFF` — otherwise the Configurator's
      sliders (MSP_SET_SIMPLIFIED_TUNING) overwrite explicit PID and filter values later.
    - master settings first, then `profile N` and the profile settings, then `save`.

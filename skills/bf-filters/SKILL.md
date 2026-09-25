@@ -18,7 +18,13 @@ per throttle band and axis must stay ≤ the level of a **proven-safe** tune:
   level. This is the single most useful extra input.
 - `--noise-budget 0.8` for cinematic or hot motors, >1 only with evidence.
 
-**Layout guidance** (the search explores these; use them to judge results):
+**Tools:** `bftune noise -o OUT [cand.txt]` lists per throttle band the measured D and gyro noise,
+the fit error, non-RPM peaks (with **persistent** = same frequency in several bands → a structural
+resonance, a job for the dyn notch) and the candidate's predicted motor noise vs the proven-safe
+level. `bftune sweep ... gyro_lpf2_static_hz ...` / `dterm_lpf2_static_hz` / `rpm_filter_q` show the
+phase-vs-noise tradeoff directly.
+
+**Layout guidance:**
 - RPM filter first: 3 harmonics; Q 500-800 (higher Q = less lag, needs accurate telemetry).
 - Gyro: with a clean build, LPF1 off and one PT1 LPF2 at ~1.5-2.5× the hover motor frequency.
   Keep LPF1 (dynamic) if the noise model shows broadband energy near crossover.
