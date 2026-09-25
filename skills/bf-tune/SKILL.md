@@ -105,8 +105,12 @@ bftune sweep -o OUT cand.txt p_roll 30:60:5
 - Round to integers and re-`assess`.
 
 ## 6. D-max
-`d_max_<axis>` ≈ 1.2-1.4× D gives more damping during stick moves. d_max is only active during
-moves (`d_max_advance`), so noise is judged at base D. The d_max cases must pass as well.
+Sweep `d_max_<axis>` from D up to 1.4× D. d_max is only active during moves (`d_max_advance`), so
+noise is judged at base D, but the `…/dmax` cases must pass too.
+
+If P/D already sit at the Ms limit, extra D *raises* the sensitivity peak (it pushes the crossover
+into the delay region). Then keep d_max = D, as on the reference 3.5". D-max pays off when base D
+is noise-limited well below the damping optimum.
 
 ## 7. Feedforward
 ```bash
