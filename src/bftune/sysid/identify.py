@@ -59,6 +59,7 @@ class Identification:
     dt: float  # nominal loop period
     time_scale: float  # actual/nominal loop period
     notes: list[str] = field(default_factory=list)
+    thrust_linear: int = 0  # thrust_linear of the identification tune (plant includes its curve)
 
     def summary(self) -> str:
         lines = []
@@ -180,4 +181,5 @@ def identify(
             G_meas_f=Gf,
             coherent_to_hz=float(coh_to),
         )
-    return Identification(axes=axes, motor=motor, runs=runs, dt=dt, time_scale=time_scale, notes=notes)
+    return Identification(axes=axes, motor=motor, runs=runs, dt=dt, time_scale=time_scale, notes=notes,
+                          thrust_linear=tune.i("thrust_linear"))

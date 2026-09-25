@@ -162,3 +162,20 @@ def validate(tune: Tune, keys: list[str] | None = None, version: str = "2026.6")
             if meta.get("length") and n != meta["length"]:
                 problems.append(f"{k}={v}: expected {meta['length']} values")
     return problems
+
+
+def thrust_linear_slope(e_pct: float, motor_cmd: float) -> float:
+    """Small-signal gain of the thrust-linearization curve at a given motor command.
+
+    pid.c pidApplyThrustLinearization(): f(x) = x*(1 + e(1-x)(1 + e(1-2x))), applied per motor
+    after mixing; throttle is pre-compensated (pidCompensateThrustLinearization) so the
+    operating motor command y is preserved and x = c^-1(y) ≈ y - e*y*(1-y). Returns f'(x).
+    """
+    e = e_pct / 100.0
+    if e == 0:
+        return 1.0
+    y = min(max(motor_cmd, 0.0), 1.0)
+    x = y * (1.0 - e * (1.0 - y))
+    h = 1e-4
+    f = lambda v: v * (1 + e * (1 - v) * (1 + e * (1 - 2 * v)))  # noqa: E731
+    return (f(x + h) - f(x - h)) / (2 * h)

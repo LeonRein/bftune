@@ -130,7 +130,10 @@ def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min
     w = np.sqrt(np.array(ns, dtype=float))
     A = np.column_stack([np.ones_like(centers), centers])
     c0, c1 = np.linalg.lstsq(A * w[:, None], (1.0 / taus) * w, rcond=None)[0]
-    if c1 < 0:  # fall back to constant tau
+    lo_hz, hi_hz = float(centers.min()), float(centers.max())
+    # physically 1/tau must stay positive and increase with speed over (and a bit beyond) the data;
+    # otherwise fall back to a constant tau (e.g. narrow throttle range in the log)
+    if c1 < 0 or c0 + c1 * 0.5 * lo_hz <= 0:
         c0, c1 = float(np.average(1.0 / taus, weights=w)), 0.0
     g1, g0 = np.polyfit(centers, np.array(gains), 1, w=w)
     return MotorModel(

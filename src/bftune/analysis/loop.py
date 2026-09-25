@@ -133,16 +133,21 @@ def rc_path_fr(tune: Tune, f: np.ndarray, rx_hz: float, dt: float, axis: int = 0
 def step_response(
     tune: Tune, axis: int, plant: Plant, op: OperatingPoint, dt: float, loop_hz: float, rx_hz: float,
     amplitude: float = 500.0, ramp_s: float = 0.02, duration: float = 0.5, with_ff: bool = True,
-    time_scale: float = 1.0,
+    time_scale: float = 1.0, relax_i: bool = True,
 ) -> dict:
-    """Response of gyro to a stick move (ramp of `ramp_s` to `amplitude` deg/s), FFT-based."""
+    """Response of gyro to a stick move (ramp of `ramp_s` to `amplitude` deg/s), FFT-based.
+
+    During stick moves iterm_relax suppresses I (pid.c applyItermRelax) and d_max_advance
+    raises D towards d_max, so by default the I path is removed and `op.d_boost` should be 1.
+    """
     n = int(2 ** np.ceil(np.log2(4 * duration / dt)))
     f = np.fft.rfftfreq(n, dt)
     f[0] = 1e-6
     t = np.arange(n) * dt
     stick = np.clip(t / ramp_s, 0, 1) * amplitude
     stick[t > 2 * duration] = 0.0  # return to zero half way so the periodic FFT sees a pulse
-    C = controller_fr(tune, axis, op, f, dt, loop_hz, time_scale=time_scale)
+    relaxed = relax_i and (tune.s("iterm_relax").startswith("RPY") or (axis < 2 and tune.s("iterm_relax").startswith("RP")))
+    C = controller_fr(tune, axis, op, f, dt, loop_hz, time_scale=time_scale, include_i=not relaxed)
     G = plant.fr(f)
     H_sp, H_ff = rc_path_fr(tune, f, rx_hz, dt, axis)
     ff_path = tune.kf(axis) * H_ff if with_ff else 0.0
