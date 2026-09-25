@@ -147,7 +147,8 @@ def validate(tune: Tune, keys: list[str] | None = None, version: str = "2026.6")
         if mode == "lookup":
             vals = [x.upper() for x in (meta.get("values") or [])]
             if vals and str(v).upper() not in vals:
-                problems.append(f"{k}={v}: must be one of {vals}")
+                hint = " (to disable a lowpass set its *_hz to 0)" if k.endswith("_type") and "lpf" in k else ""
+                problems.append(f"{k}={v}: must be one of {vals}{hint}")
         elif mode == "direct":
             try:
                 iv = int(v)

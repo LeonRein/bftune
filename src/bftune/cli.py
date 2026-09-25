@@ -79,6 +79,19 @@ def cmd_safe(a) -> int:
     from .pipeline import load_analysis, safe_tune_from_log, save_analysis, tune_from_cli_text
 
     an = load_analysis(Path(a.out))
+    if not a.log and not a.cli:
+        from .emit.cli import changed_keys
+        from .workbench import GROUPS
+
+        keys = [k for g in GROUPS.values() for k in g]
+        for name, t in an.safe:
+            ch = [k for k in changed_keys(an.tune, t) if k in keys]
+            print(f"{name}: differs from the logged tune in")
+            for k in ch:
+                print(f"    {k:28s} {an.tune.values.get(k)!s:>12} -> {t.values[k]}")
+        if not an.safe:
+            print("no proven-safe tunes stored (the logged tune is the only noise reference)")
+        return 0
     for p in a.log or []:
         an.safe.append((f"safe:{Path(p).name}", safe_tune_from_log(p)))
     for p in a.cli or []:
@@ -127,13 +140,38 @@ def cmd_suggest(a) -> int:
     from .flight import AXES
 
     wb = _wb(a)
-    base, _ = wb.load(a.file)
     axes = [AXES.index(x) for x in a.axis] if a.axis else list(wb.idn.axes)
-    res = wb.suggest(base, axes, maxiter=a.maxiter)
-    for ax, r in res.items():
-        print(f"{ax:5s}: P {r['p']} I {r['i']} D {r['d']} d_max {r['d_max']}  feasible={r['feasible']} "
-              f"noise {r['noise_vs_safe']:.2f}x safe  worst PM {r['worst']['pm']:.0f}° Ms {r['worst']['ms']:.2f}")
-    print("(proposal with all other settings fixed; judge it, then edit your candidate and run assess)")
+    for f in a.files:
+        base, _ = wb.load(f)
+        res = wb.suggest(base, axes, maxiter=a.maxiter)
+        t = base.copy()
+        for ax, r in res.items():
+            t.update(**{f"p_{ax}": r["p"], f"i_{ax}": r["i"], f"d_{ax}": r["d"], f"d_max_{ax}": r["d_max"]})
+        ass = wb.assess(t, steps=False, axes=axes)
+        tot = sum(e["objective_db"] * (0.5 if ax == "yaw" else 1.0) for ax, e in ass["axes"].items())
+        if len(a.files) > 1:
+            print(f"== {Path(f).name}: verdict with suggested gains {ass['verdict']}, total objective {tot:.2f} dB")
+        for ax, r in res.items():
+            print(f"{ax:5s}: P {r['p']} I {r['i']} D {r['d']} d_max {r['d_max']}  feasible={r['feasible']} "
+                  f"noise {r['noise_vs_safe']:.2f}x safe  worst PM {r['worst']['pm']:.0f}° Ms {r['worst']['ms']:.2f}"
+                  f"  obj {ass['axes'][ax]['objective_db']:.2f} dB")
+    print("(proposals with all other settings fixed; several files = compare filter/TPA variants at their best gains)")
+    return 0
+
+
+def cmd_errspec(a) -> int:
+    from .analysis.errspec import error_spectrum
+    from .flight import load_flight
+
+    res = {Path(p).name: error_spectrum(load_flight(p)) for p in a.logs}
+    first = next(iter(res.values()))
+    print("free-flight tracking error (setpoint - gyro) PSD [dB (deg/s)^2/Hz] per band, acro windows only")
+    print(f"{'log':24s} {'axis':5s} " + " ".join(f"{b:>7s}" for b in first["bands"]))
+    for name, r in res.items():
+        for ax, vals in r["axes"].items():
+            print(f"{name[:24]:24s} {ax:5s} " + " ".join(f"{v:7.1f}" for v in vals) + f"   ({r['windows']} windows)")
+    print("A bump at 30-60 Hz = sensitivity peak (propwash wobble); higher 5-30 Hz = weaker rejection. Pilot inputs differ")
+    print("between flights, so compare shapes and large differences (>3 dB), not small ones.")
     return 0
 
 
@@ -250,7 +288,11 @@ def main(argv: list[str] | None = None) -> int:
             s.add_argument("--maxiter", type=int, default=25)
         s.set_defaults(fn=fn)
 
-    s = sub.add_parser("safe", help="add proven-safe tunes (logs or CLI diffs) to an existing analysis")
+    s = sub.add_parser("errspec", help="free-flight tracking-error spectrum of one or more logs (pilot cross-check)")
+    s.add_argument("logs", nargs="+")
+    s.set_defaults(fn=cmd_errspec)
+
+    s = sub.add_parser("safe", help="list proven-safe tunes, or add them (logs or CLI diffs) to an existing analysis")
     s.add_argument("-o", "--out", default="bftune_out")
     s.add_argument("--log", action="append")
     s.add_argument("--cli", action="append")
@@ -282,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("suggest", help="per-axis P/I/D/d_max proposal with everything else fixed")
     _wb_args(s)
-    s.add_argument("file")
+    s.add_argument("files", nargs="+", help="one or more candidates (e.g. filter variants to compare at their best gains)")
     s.add_argument("--axis", action="append", choices=["roll", "pitch", "yaw"])
     s.add_argument("--maxiter", type=int, default=30)
     s.set_defaults(fn=cmd_suggest)

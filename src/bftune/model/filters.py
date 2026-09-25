@@ -92,7 +92,7 @@ def fr_lowpass(ftype: str, fc: float, f: np.ndarray, dt: float) -> np.ndarray:
         if fc > 0.95 * 0.5 / dt:
             return np.ones_like(np.asarray(f, dtype=float), dtype=complex)
         return fr_svf_lpf(fc, f, dt)
-    raise ValueError(f"unknown filter type {ftype}")
+    raise ValueError(f"unknown filter type {ftype} (use PT1/PT2/PT3/BIQUAD; disable a lowpass with cutoff 0)")
 
 
 def dyn_lpf_cutoff(fmin: float, fmax: float, expo: int, throttle: float, svf_dt: float | None = None) -> float:

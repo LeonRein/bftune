@@ -60,6 +60,25 @@ GROUPS = {
 _SET_LINE = re.compile(r"^\s*set\s+(\S+)\s*=\s*([^#]*?)\s*(?:#\s*(.*))?$")
 
 
+_LPF_OFF = {
+    "gyro_lpf1_type": ("gyro_lpf1_static_hz", "gyro_lpf1_dyn_min_hz"),
+    "gyro_lpf2_type": ("gyro_lpf2_static_hz",),
+    "dterm_lpf1_type": ("dterm_lpf1_static_hz", "dterm_lpf1_dyn_min_hz"),
+    "dterm_lpf2_type": ("dterm_lpf2_static_hz",),
+}
+
+
+def apply_setting(t: Tune, key: str, value) -> Tune:
+    """Set a value; `<lpf>_type = OFF` is a convenience that zeroes that lowpass's cutoffs
+    (Betaflight has no OFF type: a lowpass is disabled by cutoff 0)."""
+    if key in _LPF_OFF and str(value).upper() == "OFF":
+        for k in _LPF_OFF[key]:
+            t.values[k] = "0"
+        return t
+    t.values[key] = str(value)
+    return t
+
+
 def parse_candidate(base: Tune, text: str) -> tuple[Tune, dict[str, str]]:
     """Apply `set` lines on top of `base`; returns (tune, {key: inline reason})."""
     t = base.copy()
@@ -69,7 +88,7 @@ def parse_candidate(base: Tune, text: str) -> tuple[Tune, dict[str, str]]:
         if not m:
             continue
         k, v, why = m.group(1), m.group(2).strip(), (m.group(3) or "").strip()
-        t.values[k] = v
+        apply_setting(t, k, v)
         if why:
             reasons[k] = why
     return t, reasons
@@ -189,6 +208,10 @@ class Workbench:
             notes.append("high-frequency filtering (1-3 kHz) is weaker than any proven tune: noise model extrapolates there")
         for ax, e in per.items():
             fc = e["hover"]["fc"]
+            msf = e["hover"].get("ms_hz")
+            if msf and msf > e["coherent_to_hz"]:
+                notes.append(f"{ax}: hover sensitivity peak at {msf:.0f} Hz lies beyond the identified band "
+                             f"({e['coherent_to_hz']:.0f} Hz): its height relies on the plant model")
             if fc and fc > 0.8 * e["coherent_to_hz"]:
                 notes.append(f"{ax}: hover crossover {fc:.0f} Hz is close to the end of the identified band "
                              f"({e['coherent_to_hz']:.0f} Hz): margins rely on the model extrapolation")
@@ -205,9 +228,7 @@ class Workbench:
                 axes = [a]
         rows = []
         for v in values:
-            t = base.copy().set(key, v)
-            if key.startswith("p_") and key[2:] in AXES:  # keep I/P ratio when sweeping P unless I is swept
-                pass
+            t = apply_setting(base.copy(), key, v)
             r = self.assess(t, steps=steps, axes=axes)
             rows.append({"value": v, "verdict": r["verdict"], **{ax: e for ax, e in r["axes"].items()}})
         return rows
@@ -271,7 +292,8 @@ class Workbench:
         rep["persistent_peaks_hz"] = sorted({p["apparent_hz"] for _, p in allp if p["persistent"]})
         rep["note"] = ("Non-RPM peaks are in the (possibly aliased) log spectrum; 'apparent_hz' may be a fold of "
                        f"content above {self.src.fs/2:.0f} Hz. Peaks that persist across throttle bands at the same "
-                       "frequency suggest a frame resonance (dyn notch); none -> RPM filter alone may suffice.")
+                       "frequency suggest a frame resonance (dyn notch); none -> RPM filter alone may suffice. Peaks that move with "
+                       "throttle but are not RPM lines are usually aliased higher motor harmonics or motor-line sidebands.")
         return rep
 
     # ----------------------------------------------------------------- deliverable
@@ -350,10 +372,9 @@ def format_assessment(ass: dict) -> str:
                 f" ({e.get('worst_case', {}).get('ms', '')}) | noise {nz} | obj {e['objective_db']:.2f} dB")
             if "step" in e:
                 s = e["step"]
-                lines.append(f"        step: flick stick→gyro lag {s['flick']['stick_lag_ms']:.1f} ms (vs setpoint {s['flick']['tracking_lag_ms']:.1f})"
-                             f" ov {s['flick']['overshoot_pct']:.0f}%"
-                             f" settle {s['flick']['settle_5pct_ms']:.0f} ms | snap lag {s['snap']['tracking_lag_ms']:.1f} ms"
-                             f" ov {s['snap']['overshoot_pct']:.0f}%")
+                lines.append(f"        stick→gyro lag: flick {s['flick']['stick_lag_ms']:.1f} ms, snap {s['snap']['stick_lag_ms']:.1f} ms"
+                             f" | overshoot flick {s['flick']['overshoot_pct']:.0f}%, snap {s['snap']['overshoot_pct']:.0f}%"
+                             f" | settle {s['flick']['settle_5pct_ms']:.0f} ms | (lag vs smoothed setpoint {s['flick']['tracking_lag_ms']:.1f} ms)")
             vs = e["violations"]
             for v in vs[:5]:
                 lines.append(f"        violated: {v}")
@@ -381,7 +402,8 @@ def format_sweep(key: str, rows: list[dict]) -> str:
             nz = "n/a" if e["noise_vs_safe"] is None else f"{e['noise_vs_safe']:.2f}"
             st = ""
             if "step" in e:
-                st = f" lag {e['step']['flick']['tracking_lag_ms']:.1f} ov {e['step']['flick']['overshoot_pct']:.0f}%"
+                st = (f" stick-lag {e['step']['flick']['stick_lag_ms']:.1f} ov {e['step']['flick']['overshoot_pct']:.0f}%"
+                      f"/{e['step']['snap']['overshoot_pct']:.0f}%")
             wc = e.get("worst_case", {}).get("pm", "")
             parts.append(f"{_f(h['fc'])}/{_f(h['pm'], '{:.0f}')}/{_f(h['ms'], '{:.2f}')}, {_f(i['fc'])}, "
                          f"{w['pm']:.0f}/{w['ms']:.2f} [{wc}], {nz}, {e['objective_db']:.2f}{st}")

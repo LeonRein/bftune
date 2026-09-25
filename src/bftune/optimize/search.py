@@ -521,6 +521,6 @@ def violations(rows: list[dict], goals: Goals, noise_ratio: float | None = None)
             bad.append(f"Ms {r['ms']:.2f}>{ms_max:.1f}")
         if bad:
             out.append(f"{r['case']}: " + ", ".join(bad))
-    if noise_ratio is not None and noise_ratio > goals.noise_budget * 1.02:
+    if noise_ratio is not None and noise_ratio > goals.noise_budget + 1e-6:
         out.append(f"motor noise {noise_ratio:.2f}x proven-safe level (limit {goals.noise_budget:.2f}x)")
     return out

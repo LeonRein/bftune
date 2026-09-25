@@ -145,6 +145,13 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
                          "measured_gyro_rms": np.sqrt(b.var_filt).round(3).tolist(),
                          "fit_error": b.calib_err.round(3).tolist()} for b in nm.bands],
         "predicted_motor_noise_current": None if pred is None else pred.motor_rms.round(3).tolist(),
+        "flight": {
+            "natural_idle_hz": {str(k): round(v, 1) for k, v in an.summary.idle_q.items()},
+            "natural_idle_rpm_p20": round(an.summary.idle_hz(20) * 60),
+            "rx_rate_hz": an.summary.header_int("rc_smoothing_rx_smoothed", 0),
+            "hover_motor_hz": round(float(np.mean([np.mean(ai.op.motor_hz) for ai in idn.axes.values()])), 1),
+        },
+        "safe_tunes": [n for n, _ in an.safe],
         "notes": idn.notes,
         "warnings": an.warnings,
     }

@@ -37,9 +37,15 @@ bftune assess -o OUT --with-current --with-safe
 - For the current and safe tunes, note hover/idle crossover, Ms, full-throttle PM, the **worst
   case and its label**, noise vs the safe level, and stick-flick lag and overshoot.
 - Write down what limits each tune (e.g. "full/d/hiK+delay PM 23°: TPA cuts D at full throttle").
-- **Cross-check with the pilot.** Does the model explain what they felt? High hover Ms means
-  wobble and propwash; low idle crossover means propwash; low full-throttle PM means oscillation on
-  punch-outs.
+- `bftune safe -o OUT` lists how each proven-safe tune differs from the logged one.
+- **Cross-check with the pilot**, using the model *and* the flight data:
+  - `bftune errspec LOG1 LOG2 ...` gives the free-flight tracking-error spectrum per log. A bump at
+    30-60 Hz is the sensitivity peak.
+  - Weight **hover/mid Ms and its frequency** most. A peak in the 30-60 Hz band is what pilots feel
+    as propwash wobble or "bouncy" flight (on the reference quad, Ms 3.3 at 46 Hz felt worse than
+    Ms 1.7, even though that tune's idle crossover was *higher*).
+  - Idle crossover is secondary: authority in dives.
+  - Low full-throttle PM means oscillation on punch-outs.
   - If the model and the pilot disagree, find out why before you continue: a different metric,
     missing data, or a model limitation.
   - Record the conclusion in the worklog.
@@ -49,10 +55,23 @@ bftune assess -o OUT --with-current --with-safe
 bftune noise -o OUT                               # bands, non-RPM peaks (persistent?), safe levels
 bftune sweep -o OUT cand.txt gyro_lpf2_static_hz 300,400,500,650,800
 bftune sweep -o OUT cand.txt dterm_lpf2_static_hz 90:180:15
+bftune suggest -o OUT v_pt3_130.txt v_pt3_110.txt v_2xpt1.txt   # compare layouts at their best gains
 ```
+**Filters and D are coupled.** A stronger D-term filter allows more D inside the noise budget. So
+compare filter layouts *at their noise-limited best gains*: put each layout in its own candidate
+file and run `suggest` on all of them (it prints verdict and objective per file). Then come back
+after step 5.
+
+Disable a lowpass by setting its cutoff to 0. In candidate files, `set gyro_lpf1_type = OFF` is
+accepted as a shortcut that zeroes that filter's cutoffs.
 1. **RPM filter first.** Use all harmonics at weight 100 when they are visible in gyroUnfilt, and Q 500-800.
-2. **Dynamic notch.** Keep one only if `noise` shows **persistent** non-RPM peaks, or the unfiltered
-   spectrum has a stationary line. Otherwise set `dyn_notch_count = 0`, which saves phase at crossover.
+2. **Dynamic notch.** It is *required* if `noise` shows **persistent** non-RPM peaks (a frame
+   resonance). With none, removing it saves 2-3° of phase at crossover, but it also removes noise
+   (often most on yaw). Remove it only if every axis stays within the noise budget; use
+   `yaw_lowpass_hz` for yaw if needed. Otherwise keep it.
+
+   Peaks that move with throttle but are not on the RPM lines are usually aliases of higher motor
+   harmonics above the log Nyquist, or sidebands of the motor lines. They are not structural.
 3. **Gyro LPF.** Use the least filtering whose motor noise stays ≤ the budget at every band. On a
    clean build that is usually LPF1 off plus one PT1 LPF2 at 1.5-2.5× the hover motor frequency.
    Don't go weaker at 1-3 kHz than a tune that has actually flown: `assess` prints a note when you do.
@@ -98,7 +117,8 @@ cinematic 3/8 %). For yaw, remember `feedforward_yaw_hold_*` also acts.
 
 ## 8. Judgement settings
 - `rc_smoothing_auto_factor`: 35 freestyle, 25 race, 60 cinematic (latency vs RC jitter).
-- `dyn_idle_min_rpm`: about 90 % of the natural idle rpm (`analysis.json`), to keep authority in dives.
+- `dyn_idle_min_rpm`: about 90-110 % of the natural idle rpm (`analysis.json` → `flight.natural_idle_rpm_p20`),
+  divided by 100. Sweep it: higher means more idle authority, but also more idle thrust (floaty).
 - `iterm_relax_cutoff`: 15 freestyle, 20 race, 10 cinematic.
 - Leave anti-gravity and FF smoothing/jitter at their defaults unless the log shows a problem.
 
