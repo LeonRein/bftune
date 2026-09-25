@@ -84,7 +84,8 @@ def tune_feedforward(fl: Flight, idn: Identification, tune: Tune, style: str = "
                       f"(reaction torque), so FF mainly speeds the first 50 ms; modelled overshoot {ov:.0f}%, lag {lag:.1f} ms")
         else:
             reason = (f"minimum tracking lag ({lag:.1f} ms) with ≤{target:.0f}% overshoot on 300°/s-in-50ms and "
-                      f"{a_fast:.0f}°/s-in-30ms stick moves (modelled {ov:.0f}%); physics ideal F≈{f_ideal:.0f}")
+                      f"{a_fast:.0f}°/s-in-30ms stick moves (modelled {ov:.0f}%); F≈{f_ideal:.0f} would be needed if "
+                      f"FF alone did the tracking — P already contributes, so less is optimal")
         out.append(Decision(f"f_{ax}", str(int(F)), reason))
     return out
 

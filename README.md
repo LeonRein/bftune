@@ -21,7 +21,8 @@ the results and write the CLI commands for you.
    combination.
 5. **Optimize** disturbance rejection (propwash, turbulence) under robust stability constraints:
    phase margin, gain margin, peak sensitivity and delay margin across idle, hover, mid and full
-   throttle, battery sag, extra delay and D-max. The noise budget comes from tunes proven to fly
+   throttle, ±10 % actuator gain (battery sag, motor wear), +0.3 ms delay and D-max. Setpoint tracking
+   (attitude hold) is part of the objective. The noise budget comes from tunes proven to fly
    with cool motors. Filters, TPA, thrust_linear, RPM and dynamic-notch settings are searched from
    several seeds.
 6. **Rules** for the parts a linear model can't score: feedforward from simulated stick flicks,
