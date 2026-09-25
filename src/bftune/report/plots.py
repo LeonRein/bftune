@@ -99,7 +99,7 @@ def step_compare(idn, loop_hz: float, rx_hz: float, old: Tune, new: Tune, path: 
             if lab == "current":
                 axs[axis].plot(r["t"] * 1000, r["setpoint"], color=C_MEAS, lw=1, ls="--", label="setpoint")
             axs[axis].plot(r["t"] * 1000, r["gyro"], color=col,
-                           label=f"{lab}: lag {m['tracking_lag_ms']:.1f} ms, overshoot {m['overshoot_pct']:.0f}%")
+                           label=f"{lab}: stick→gyro lag {m['stick_lag_ms']:.1f} ms, overshoot {m['overshoot_pct']:.0f}%")
         axs[axis].set_title(f"{AXES[axis]}: stick flick 300°/s in 50 ms (model)")
         axs[axis].set_xlabel("ms")
         axs[axis].grid(True, alpha=0.3)

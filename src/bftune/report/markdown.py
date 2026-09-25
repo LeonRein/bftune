@@ -65,14 +65,14 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
     if result.get("method"):
         L.append(f"Method: {result['method']}.")
         L.append("")
-    L.append("| axis | tune | verdict | hover crossover | hover PM | hover Ms | idle crossover | idle Ms | full-throttle PM | worst PM | worst Ms | noise vs proven-safe | stick flick lag / overshoot |")
+    L.append("| axis | tune | verdict | hover crossover | hover PM | hover Ms | idle crossover | idle Ms | full-throttle PM | worst PM | worst Ms | noise vs proven-safe | stick flick: stick→gyro lag / overshoot |")
     L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for name, a in result["assessment"].items():
         for ax, e in a["axes"].items():
             h, i, fu, w = e["hover"], e["idle"], e["full"], e["worst"]
             nb = _f(e.get("noise_vs_safe"), "{:.2f}") if result.get("noise_model", True) else "n/a"
             st = e.get("step", {}).get("flick")
-            stt = f"{st['tracking_lag_ms']:.1f} ms / {st['overshoot_pct']:.0f}%" if st else "—"
+            stt = (f"{st.get('stick_lag_ms', st['tracking_lag_ms']):.1f} ms / {st['overshoot_pct']:.0f}%") if st else "—"
             L.append(f"| {ax} | {name} | {a['verdict']} | {_f(h['fc'])} Hz | {_f(h['pm'], '{:.0f}')}° | {_f(h['ms'], '{:.2f}')} | "
                      f"{_f(i['fc'])} Hz | {_f(i['ms'], '{:.2f}')} | {_f(fu['pm'], '{:.0f}')}° | {_f(w['pm'], '{:.0f}')}° | "
                      f"{_f(w['ms'], '{:.2f}')} | {nb} | {stt} |")
@@ -124,4 +124,7 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
         L.append("**Range problems:** " + "; ".join(result["problems"]))
     p = out / "report.md"
     p.write_text("\n".join(L) + "\n")
+    from .html import markdown_to_html
+
+    (out / "report.html").write_text(markdown_to_html(p.read_text(), out, title=f"bftune report — {an.craft or 'craft'}"))
     return p
