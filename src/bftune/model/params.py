@@ -69,7 +69,7 @@ class Tune:
     values: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_config(cls, cfg: Config) -> "Tune":
+    def from_config(cls, cfg: Config) -> Tune:
         vals = {k: str(v) for k, v in DEFAULTS.items()}
         for k in DEFAULTS:
             v = cfg.get(k)
@@ -77,7 +77,7 @@ class Tune:
                 vals[k] = v
         return cls(vals)
 
-    def copy(self) -> "Tune":
+    def copy(self) -> Tune:
         return Tune(dict(self.values))
 
     def i(self, key: str) -> int:
@@ -89,11 +89,11 @@ class Tune:
     def s(self, key: str) -> str:
         return str(self.values[key]).upper()
 
-    def set(self, key: str, value) -> "Tune":
+    def set(self, key: str, value) -> Tune:
         self.values[key] = ",".join(str(int(v)) for v in value) if isinstance(value, (list, tuple)) else str(value)
         return self
 
-    def update(self, **kw) -> "Tune":
+    def update(self, **kw) -> Tune:
         for k, v in kw.items():
             self.set(k, v)
         return self
@@ -177,5 +177,5 @@ def thrust_linear_slope(e_pct: float, motor_cmd: float) -> float:
     y = min(max(motor_cmd, 0.0), 1.0)
     x = y * (1.0 - e * (1.0 - y))
     h = 1e-4
-    f = lambda v: v * (1 + e * (1 - v) * (1 + e * (1 - 2 * v)))  # noqa: E731
+    f = lambda v: v * (1 + e * (1 - v) * (1 + e * (1 - 2 * v)))
     return (f(x + h) - f(x - h)) / (2 * h)

@@ -50,7 +50,6 @@ def tune_feedforward(fl: Flight, idn: Identification, tune: Tune, style: str = "
         from ..model.plant import Plant
 
         pl = Plant(plant.structure, p)
-        k_eff = p["K"] * (p.get("tz", 0) if plant.structure.startswith("integ_lag_zero") else 1.0)
         f_ideal = 1.0 / (p["K"] * FEEDFORWARD_SCALE * 0.01)
         best = None
         rows = []

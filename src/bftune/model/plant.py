@@ -40,7 +40,7 @@ class Plant:
     def fr(self, f: np.ndarray) -> np.ndarray:
         return plant_fr(self.structure, self.params, f)
 
-    def scaled(self, motor_hz: float, vbat: float | None = None, motor_model=None) -> "Plant":
+    def scaled(self, motor_hz: float, vbat: float | None = None, motor_model=None) -> Plant:
         """Re-schedule to another operating point (motor speed, battery voltage).
 
         Torque authority ∝ omega * domega/dcmd (thrust ∝ omega^2). With a measured

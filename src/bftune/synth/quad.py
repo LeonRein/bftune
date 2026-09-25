@@ -165,7 +165,6 @@ def simulate(
     mix = np.array([[-1, 1, -1], [-1, -1, 1], [1, 1, 1], [1, -1, -1]], dtype=float)
 
     # ---- controller state ----
-    ax_names = ("roll", "pitch", "yaw")
     kp = [tune.kp(a) for a in range(3)]
     ki = [tune.ki(a) for a in range(3)]
     kd = [tune.kd(a) for a in range(3)]
@@ -203,7 +202,6 @@ def simulate(
     I = [0.0, 0.0, 0.0]
     prevD = [0.0, 0.0, 0.0]
     chirp_filt_state = [0.0, 0.0]  # x1, y1
-    phase_t = 0.0
     last_axis = -1
     chirp_count = 0
     beta = (f1 / f0) ** (1.0 / chirp_s)
@@ -311,7 +309,6 @@ def simulate(
         domega = (w_ss - omega) / tau
         omega = omega + domega * dt
         # ---- rigid body ----
-        dw = omega - spread * wh
         acc = np.zeros(3)
         for a in (0, 1):
             acc[a] = kT[a] * np.sum(mix[:, a] * (omega**2 - (spread * wh) ** 2)) - spec.aero_damping * rate[a]

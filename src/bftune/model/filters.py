@@ -177,7 +177,7 @@ class SvfLpf:
 class SvfNotch:
     """Notch with optional weight (weight=1 → svfNotch, else rpmNotch)."""
 
-    __slots__ = ("a1", "a2", "g", "wq", "ic1", "ic2")
+    __slots__ = ("a1", "a2", "g", "ic1", "ic2", "wq")
 
     def __init__(self, f0: float, q: float, dt: float, weight: float = 1.0):
         self.ic1 = self.ic2 = 0.0

@@ -1,0 +1,11 @@
+{
+  "name": "bftune",
+  "owner": { "name": "LeonRein" },
+  "plugins": [
+    {
+      "name": "bftune",
+      "source": "./",
+      "description": "Betaflight tuning engineer: system identification from chirp logs, alias-aware noise model, robust PID/filter optimization, CLI output."
+    }
+  ]
+}

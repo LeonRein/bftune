@@ -7,14 +7,14 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt
+import numpy as np
 
-from ..analysis.loop import evaluate, step_metrics, step_response  # noqa: E402
-from ..flight import AXES  # noqa: E402
-from ..model.controller import OperatingPoint  # noqa: E402
-from ..model.params import Tune, thrust_linear_slope  # noqa: E402
-from ..model.plant import Plant  # noqa: E402
+from ..analysis.loop import evaluate, step_metrics, step_response
+from ..flight import AXES
+from ..model.controller import OperatingPoint
+from ..model.params import Tune, thrust_linear_slope
+from ..model.plant import Plant
 
 C_OLD, C_NEW, C_MEAS, C_ALT = "#6b7280", "#2563eb", "#111827", "#d97706"
 

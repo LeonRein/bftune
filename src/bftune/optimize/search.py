@@ -27,7 +27,7 @@ from ..flight import AXES, Flight
 from ..model import filters as flt
 from ..model.controller import OperatingPoint, controller_fr
 from ..model.params import DTERM_SCALE, ITERM_SCALE, PTERM_SCALE, Tune, thrust_linear_slope
-from ..noise.model import NoiseModel, chain_power
+from ..noise.model import NoiseModel
 from ..sysid.identify import Identification
 
 
@@ -49,9 +49,10 @@ class Goals:
     # I is set from P (Betaflight units) — attitude hold through flips/wind is a judgement call
     # the linear model cannot score well; defaults follow proven freestyle ratios.
     i_over_p: tuple[float, float, float] = (1.5, 1.5, 1.6)
+    hf_extrapolation: float = 1.25  # max 1-3 kHz filter gain relative to the least-filtered safe tune
 
     @classmethod
-    def for_style(cls, style: str, noise_budget: float | None = None) -> "Goals":
+    def for_style(cls, style: str, noise_budget: float | None = None) -> Goals:
         g = cls(style=style)
         if style == "race":
             g.ms_max, g.pm_min, g.perf_band, g.idle_weight = 2.1, 42.0, (5.0, 80.0), 0.3
@@ -171,7 +172,7 @@ class AxisProblem:
             y = min(max(c.op.throttle, 0.0), 1.0)
             G = G * (thrust_linear_slope(tune.i("thrust_linear"), y)
                      / thrust_linear_slope(getattr(idn, "thrust_linear", 0), y))
-            kp, ki, kd = tune.kp(axis), tune.ki(axis), tune.kd(axis)
+            kp, ki = tune.kp(axis), tune.ki(axis)
             bP = C.Fg * (C.P / kp if kp > 0 else PTERM_SCALE)  # per unit Kp (includes yaw LPF, TPA if PD)
             bI = C.Fg * (C.I / ki if ki > 0 else ITERM_SCALE * idn.dt / (1 - flt.zinv(fr * idn.time_scale, idn.dt)))
             tpa = tune.tpa_factor(c.op.throttle, c.op.tpa_low_active)
@@ -293,9 +294,27 @@ def apply_axis(tune: Tune, r: AxisResult) -> Tune:
     return tune
 
 
-def score_tune(fl, idn, nm, tune, goals, noise_ref, axes=(0, 1, 2), maxiter=40, seed=0):
+def hf_filtering(tune: Tune, idn: Identification, loop_hz: float) -> tuple[float, float]:
+    """RMS gain of the gyro chain and of the gyro+D-term chain over 1-3 kHz (hover op).
+
+    Noise above the log Nyquist is inferred, not observed; this measures how far a candidate
+    relies on that inference compared with tunes that have actually flown.
+    """
+    f = np.linspace(1000.0, min(3000.0, 0.45 * loop_hz), 200)
+    ai = next(iter(idn.axes.values()))
+    op = OperatingPoint(throttle=ai.op.throttle, motor_hz=ai.op.motor_hz, dyn_notch_hz=ai.op.dyn_notch_hz)
+    C = controller_fr(tune, 0, op, f, idn.dt, loop_hz, time_scale=idn.time_scale)
+    return float(np.sqrt(np.mean(np.abs(C.Fg) ** 2))), float(np.sqrt(np.mean(np.abs(C.Fg * C.Fd) ** 2)))
+
+
+def score_tune(fl, idn, nm, tune, goals, noise_ref, axes=(0, 1, 2), maxiter=40, seed=0, hf_ref=None):
     results = {}
     total = 0.0
+    if hf_ref is not None:
+        g, d = hf_filtering(tune, idn, fl.loop_hz)
+        excess = max(g / hf_ref[0], d / hf_ref[1]) - goals.hf_extrapolation
+        if excess > 0:  # weaker HF filtering than any proven tune: do not trust the noise model there
+            total += 100.0 * excess
     for axis in axes:
         cases = build_cases(fl, idn, tune, axis, goals)
         prob = AxisProblem(tune, axis, cases, idn, fl.loop_hz, nm, goals, noise_ref.get(axis) if noise_ref else None)
@@ -395,13 +414,16 @@ def candidate_moves(t: Tune) -> list[tuple[str, dict]]:
 
 def global_search(fl, idn, nm, tune0: Tune, goals: Goals, passes: int = 2, maxiter: int = 30,
                   log=print, fixed: dict | None = None, safe_tunes: list[Tune] | None = None,
-                  noise_ref: dict | None = None) -> SearchResult:
+                  noise_ref: dict | None = None, hf_ref: tuple[float, float] | None = None) -> SearchResult:
     if noise_ref is None and nm is not None:
         noise_ref = reference_noise(nm, [tune0] + list(safe_tunes or []), fl.loop_hz, idn)
+    if hf_ref is None:
+        hf = [hf_filtering(t, idn, fl.loop_hz) for t in [tune0] + list(safe_tunes or [])]
+        hf_ref = (max(h[0] for h in hf), max(h[1] for h in hf))
     tune = tune0.copy()
     if fixed:
         tune.update(**fixed)
-    best_score, best_axes = score_tune(fl, idn, nm, tune, goals, noise_ref, maxiter=maxiter)
+    best_score, best_axes = score_tune(fl, idn, nm, tune, goals, noise_ref, maxiter=maxiter, hf_ref=hf_ref)
     for r in best_axes.values():
         apply_axis(tune, r)
     history = [("start", best_score)]
@@ -410,7 +432,9 @@ def global_search(fl, idn, nm, tune0: Tune, goals: Goals, passes: int = 2, maxit
         improved = False
         for name, mv in candidate_moves(tune):
             cand = tune.copy().update(**mv)
-            sc, axes = score_tune(fl, idn, nm, cand, goals, noise_ref, maxiter=maxiter)
+            if all(str(cand.values.get(k)) == str(tune.values.get(k)) for k in mv):
+                continue  # no-op move
+            sc, axes = score_tune(fl, idn, nm, cand, goals, noise_ref, maxiter=maxiter, hf_ref=hf_ref)
             feas = all(a.feasible for a in axes.values())
             tag = "" if feas else " (constraints violated)"
             # the score already contains constraint penalties, so infeasible candidates can
@@ -442,12 +466,16 @@ def multi_start_search(fl, idn, nm, tune0: Tune, goals: Goals, seeds: dict[str, 
                        maxiter: int = 25, log=print, safe_tunes: list[Tune] | None = None) -> tuple[SearchResult, dict]:
     """Run the coordinate-descent search from several filter/TPA seeds; keep the best."""
     noise_ref = reference_noise(nm, [tune0] + list(safe_tunes or []), fl.loop_hz, idn) if nm is not None else None
+    hf = [hf_filtering(t, idn, fl.loop_hz) for t in [tune0] + list(safe_tunes or [])]
+    hf_ref = (max(h[0] for h in hf), max(h[1] for h in hf))
+    log(f"HF filtering reference (1-3 kHz gain): gyro {hf_ref[0]:.3f}, gyro+dterm {hf_ref[1]:.4f}")
     results = {}
     best = None
     for name, seed in seeds.items():
         log(f"=== seed: {name}")
         start = tune0.copy().update(**seed)
-        r = global_search(fl, idn, nm, start, goals, passes=passes, maxiter=maxiter, log=log, noise_ref=noise_ref)
+        r = global_search(fl, idn, nm, start, goals, passes=passes, maxiter=maxiter, log=log, noise_ref=noise_ref,
+                          hf_ref=hf_ref)
         results[name] = r
         log(f"=== seed {name}: final score {r.score:.3f}")
         if best is None or r.score < best.score:

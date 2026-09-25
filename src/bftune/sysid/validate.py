@@ -119,7 +119,7 @@ def replay(
             G = plant.fr(f)
             den = 1 + G * C.Cy
             # remove means / detrend to limit wrap-around, use linear-phase padding
-            r0, F0, y0 = r - r[0], F - F[0], y - y[0]
+            r0, F0 = r - r[0], F - F[0]
             R = np.fft.rfft(r0, nfft)
             FF = np.fft.rfft(F0, nfft)
             ypred = np.fft.irfft(G * (C.Cr * R + FF) / den, nfft)[:n] + y[0]

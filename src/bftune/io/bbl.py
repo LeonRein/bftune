@@ -110,7 +110,7 @@ class Log:
 
 
 class _Stream:
-    __slots__ = ("data", "pos", "end", "eof")
+    __slots__ = ("data", "end", "eof", "pos")
 
     def __init__(self, data: bytes, start: int, end: int):
         self.data = data

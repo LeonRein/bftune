@@ -13,12 +13,18 @@ from . import __version__
 
 
 def cmd_inspect(a) -> int:
-    from .flight import AXES, flight_from_log
+    from .flight import AXES, flight_from_log, load_flight
     from .io.bbl import decode
     from .io.dump import config_from_headers, load_dump, merge
     from .pipeline import sanity_warnings
     from .sysid.chirp import find_chirps
 
+    if a.log.endswith(".pkl"):
+        fl = load_flight(a.log)
+        print(f"{a.log}: synthetic flight, {fl.n} frames, {fl.t[-1]:.1f} s, rate {fl.fs:.0f} Hz, loop {fl.loop_hz:.0f} Hz")
+        for r in find_chirps(fl):
+            print(f"    chirp {AXES[r.axis]:5s} t={fl.t[r.start]:6.1f}s {r.f_start:.1f}->{r.f_end:.0f} Hz thr {r.throttle:.2f}")
+        return 0
     logs = decode(a.log)
     print(f"{a.log}: {len(logs)} log session(s)")
     for lg in logs:
@@ -82,6 +88,12 @@ def cmd_synth(a) -> int:
     with open(a.output, "wb") as fh:
         pickle.dump(fl, fh)
     print(f"wrote synthetic flight {a.output} ({fl.n} frames)")
+    if a.truth:
+        from .synth.quad import true_plant
+
+        for axis, name in enumerate(("roll", "pitch", "yaw")):
+            tp = true_plant(CRAFTS[a.craft], axis)
+            print(f"true {name}: {tp.structure} " + ", ".join(f"{k}={v:.4g}" for k, v in tp.params.items()))
     return 0
 
 
@@ -120,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("synth", help="generate a synthetic chirp flight (testing)")
     s.add_argument("craft", choices=["whoop65", "3.5inch", "5inch", "10inch"])
+    s.add_argument("--truth", action="store_true", help="also print the true plant parameters")
     s.add_argument("-o", "--output", default="synthetic.pkl")
     s.add_argument("--chirp-s", type=float, default=12.0)
     s.add_argument("--hover-s", type=float, default=4.0)

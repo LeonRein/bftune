@@ -5,8 +5,8 @@ import dataclasses
 import numpy as np
 import pytest
 
-from bftune.sysid.identify import identify
 from bftune.synth.quad import CRAFTS, default_tune, simulate, true_plant
+from bftune.sysid.identify import identify
 
 pytestmark = pytest.mark.slow
 

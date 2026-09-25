@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import pickle
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -17,9 +17,9 @@ import numpy as np
 from . import __version__
 from .flight import AXES, Flight, load_flight
 from .io.dump import parse_dump
-from .model.controller import OperatingPoint
 from .model.params import Tune
-from .noise.model import NoiseModel, build as build_noise
+from .noise.model import NoiseModel
+from .noise.model import build as build_noise
 from .noise.model import predict as predict_noise
 from .sysid.identify import Identification, identify
 from .sysid.validate import closed_loop_check, replay
@@ -166,7 +166,7 @@ def safe_tune_from_log(path: str) -> Tune:
 def archetype_seed(an: Analysis) -> dict:
     """RPM-filter-first filter layout scaled to the craft's hover motor frequency."""
     fm = float(np.mean([np.mean(ai.op.motor_hz) for ai in an.idn.axes.values()]))
-    clip = lambda v, lo, hi: int(round(min(max(v, lo), hi) / 5) * 5)  # noqa: E731
+    clip = lambda v, lo, hi: int(round(min(max(v, lo), hi) / 5) * 5)
     d1 = clip(0.4 * fm, 60, 150)
     return {
         "gyro_lpf1_dyn_min_hz": 0, "gyro_lpf1_static_hz": 0, "gyro_lpf2_type": "PT1",
@@ -180,9 +180,8 @@ def archetype_seed(an: Analysis) -> dict:
 
 def optimize(out: Path, style: str = "freestyle", safe_logs: list[str] | None = None, safe_cli: list[str] | None = None,
              passes: int = 2, maxiter: int = 25, noise_budget: float = 1.0, log=print, seeds: dict | None = None) -> dict:
-    from .emit.cli import cli_block, diff_table
     from .optimize import rules
-    from .optimize.search import FILTER_KEYS, Goals, multi_start_search, reference_noise
+    from .optimize.search import FILTER_KEYS, Goals, multi_start_search
 
     out = Path(out)
     an = load_analysis(out)

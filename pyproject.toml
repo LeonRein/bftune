@@ -29,5 +29,9 @@ bftune = "bftune.cli:main"
 [tool.ruff]
 line-length = 120
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "E731", "E741", "B023", "B905"]  # P/I/D are domain names
+
 [tool.pytest.ini_options]
 markers = ["slow: long-running synthetic end-to-end tests"]

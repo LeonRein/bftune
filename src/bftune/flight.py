@@ -86,6 +86,15 @@ def _mode_mask_per_frame(log: Log) -> np.ndarray:
 
 
 def load_flight(bbl_path: str | Path, dump_path: str | Path | None = None, log_index: int | None = None) -> Flight:
+    if str(bbl_path).endswith(".pkl"):  # synthetic flight from `bftune synth`
+        import pickle
+
+        with open(bbl_path, "rb") as fh:
+            fl = pickle.load(fh)
+        if dump_path:
+            cfg = merge(load_dump(str(dump_path)), fl.cfg)
+            fl.cfg = cfg
+        return fl
     logs = decode(str(bbl_path))
     if log_index is None:
         log_index = int(np.argmax([lg.main.shape[0] for lg in logs]))
