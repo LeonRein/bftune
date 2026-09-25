@@ -12,6 +12,10 @@ import numpy as np
 from . import __version__
 
 
+def _log(msg: str) -> None:
+    print(msg, flush=True)
+
+
 def cmd_inspect(a) -> int:
     from .flight import AXES, flight_from_log, load_flight
     from .io.bbl import decode
@@ -45,7 +49,7 @@ def cmd_inspect(a) -> int:
 def cmd_analyze(a) -> int:
     from .pipeline import analyze
 
-    analyze(a.log, a.dump, Path(a.out), a.index)
+    analyze(a.log, a.dump, Path(a.out), a.index, log=_log)
     return 0
 
 
@@ -53,7 +57,7 @@ def cmd_optimize(a) -> int:
     from .pipeline import optimize
 
     optimize(Path(a.out), style=a.style, safe_logs=a.safe_log, safe_cli=a.safe_cli, passes=a.passes,
-             maxiter=a.maxiter, noise_budget=a.noise_budget)
+             maxiter=a.maxiter, noise_budget=a.noise_budget, log=_log)
     print((Path(a.out) / "tune_cli.txt").read_text())
     return 0
 
@@ -149,8 +153,8 @@ def _opt_args(s) -> None:
                    help="blackbox log of another tune of the same quad that flew with cool motors (raises the noise budget to its level)")
     s.add_argument("--safe-cli", action="append", help="CLI diff of another proven-safe tune")
     s.add_argument("--noise-budget", type=float, default=1.0, help="multiplier on the proven-safe motor-noise level")
-    s.add_argument("--passes", type=int, default=2)
-    s.add_argument("--maxiter", type=int, default=25)
+    s.add_argument("--passes", type=int, default=2, help="coordinate-descent passes per seed (more = slower, finer)")
+    s.add_argument("--maxiter", type=int, default=25, help="differential-evolution generations per axis evaluation")
 
 
 if __name__ == "__main__":

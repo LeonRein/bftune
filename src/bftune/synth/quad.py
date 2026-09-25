@@ -53,6 +53,8 @@ class CraftSpec:
     tune: dict = field(default_factory=dict)  # CLI overrides for the synthetic "current" tune
 
     gamma: float = 0.75  # steady-state motor curve: hz = idle + (max-idle)*cmd^gamma
+    chirp_f1: float = 200.0  # per-class chirp end frequency (bf-flight-protocol table)
+    chirp_amp: tuple[float, float, float] = (230.0, 230.0, 180.0)
 
     def tau(self, hz: float) -> float:
         return 1.0 / (self.tau_c0 + self.tau_c1 * hz)
@@ -69,7 +71,8 @@ CRAFTS = {
     "whoop65": CraftSpec(
         "whoop65", loop_hz=4000, log_ratio=4, cells=1, motor_poles=12, hover_throttle=0.45, hover_hz=700, max_hz=1100,
         idle_hz=250, tau_c0=45, tau_c1=0.03, K_roll=260, K_pitch=250, K_yaw=40, tz_yaw=0.04, T_esc=0.0012,
-        T_gyro=0.0007, noise_white=0.6, noise_lines=(10.0, 4.0, 2.0), frame_mode_hz=0,
+        T_gyro=0.0007, noise_white=0.6, noise_lines=(10.0, 4.0, 2.0), frame_mode_hz=0, chirp_f1=300.0,
+        chirp_amp=(150.0, 150.0, 120.0),
         tune={"p_roll": 70, "i_roll": 80, "d_roll": 55, "d_max_roll": 65, "p_pitch": 75, "i_pitch": 85, "d_pitch": 60,
               "d_max_pitch": 70, "p_yaw": 80, "i_yaw": 80, "motor_poles": 12, "gyro_lpf1_dyn_min_hz": 300,
               "gyro_lpf1_dyn_max_hz": 600, "dterm_lpf1_dyn_min_hz": 100, "dterm_lpf1_dyn_max_hz": 200},
@@ -84,7 +87,8 @@ CRAFTS = {
     "10inch": CraftSpec(
         "10inch", loop_hz=4000, log_ratio=4, cells=6, hover_throttle=0.30, hover_hz=80, max_hz=190, idle_hz=35,
         tau_c0=8, tau_c1=0.12, K_roll=35, K_pitch=28, K_yaw=2.5, tz_yaw=0.25, T_esc=0.0015, T_gyro=0.0006,
-        noise_white=0.3, noise_lines=(5.0, 2.0, 1.0), frame_mode_hz=95, frame_mode_amp=2.0,
+        noise_white=0.3, noise_lines=(5.0, 2.0, 1.0), frame_mode_hz=95, frame_mode_amp=2.0, chirp_f1=120.0,
+        chirp_amp=(150.0, 150.0, 120.0),
         tune={"p_roll": 60, "i_roll": 90, "d_roll": 45, "d_max_roll": 55, "p_pitch": 65, "i_pitch": 95, "d_pitch": 50,
               "d_max_pitch": 60, "p_yaw": 60, "i_yaw": 90, "gyro_lpf1_dyn_min_hz": 150, "gyro_lpf1_dyn_max_hz": 300,
               "dterm_lpf1_dyn_min_hz": 60, "dterm_lpf1_dyn_max_hz": 120, "dterm_lpf2_static_hz": 120,
@@ -101,22 +105,74 @@ def _spread(spec: CraftSpec) -> np.ndarray:
 
 
 def true_plant(spec: CraftSpec, axis: int) -> Plant:
-    """Linearization of the twin at hover (average of the four motor lags)."""
+    """Linearization of the twin at hover (average of the four motor lags).
+
+    Equivalent pure delay: the command reaches the gyro after d_esc + d_gyro + 1 loops, but the
+    twin's two Euler integrators respond within the same step (each ~half a sample *earlier*
+    than a zero-order-hold continuous system), which cancels the extra loop: T = T_esc + T_gyro.
+    """
     sp = _spread(spec)
     tau = float(np.mean([spec.tau(spec.w_hover * s) for s in sp]))
-    T = spec.T_esc + spec.T_gyro + 1.0 / spec.loop_hz  # one loop of computation
+    T = round(spec.T_esc * spec.loop_hz) / spec.loop_hz + round(spec.T_gyro * spec.loop_hz) / spec.loop_hz
     if axis < 2:
         K = spec.K_roll if axis == 0 else spec.K_pitch
         return Plant("pole_lag", {"K": K, "a": spec.aero_damping, "tau": tau, "T": T}, spec.w_hover, 3.8 * spec.cells)
     return Plant("integ_lag_zero", {"K": spec.K_yaw, "tz": spec.tz_yaw, "tau": tau, "T": T}, spec.w_hover, 3.8 * spec.cells)
 
 
-def default_tune(spec: CraftSpec) -> Tune:
-    cfg = Config(values={k: str(v) for k, v in spec.tune.items()})
-    t = Tune.from_config(cfg)
+def default_tune(spec: CraftSpec, target_pm: float = 40.0, target_gm_db: float = 6.0) -> Tune:
+    """A stable, deliberately conservative starting tune for the twin.
+
+    Filters come from the class overrides; PID gains keep Betaflight's default P:I:D:Dmax
+    ratios (45:80:30:40 roll, yaw P:I 45:80) and are scaled to the largest value that still
+    gives PM >= target and GM >= target at hover on the true plant, then backed off 10 % (typical pilot-tune margins).
+    """
+    from ..analysis.loop import evaluate
+    from ..model.controller import OperatingPoint
+
+    base = {k: v for k, v in spec.tune.items() if not k.startswith(("p_", "i_", "d_", "d_max_", "f_"))}
+    t = Tune.from_config(Config(values={k: str(v) for k, v in base.items()}))
     t.set("motor_poles", spec.motor_poles)
     t.set("dyn_notch_count", 1)
+    ratios = {"roll": (45, 80, 30, 40), "pitch": (47, 84, 34, 46), "yaw": (45, 80, 0, 0)}
+    op = OperatingPoint(throttle=spec.hover_throttle, motor_hz=list(_spread(spec) * spec.w_hover))
+    for axis, name in enumerate(("roll", "pitch", "yaw")):
+        plant = true_plant(spec, axis)
+        best = None  # (fc, gains)
+        rp, ri, rd, rdm = ratios[name]
+        for dmul in ((1.0,) if rd == 0 else (0.8, 1.0, 1.3, 1.6, 2.0, 2.5, 3.0)):
+            for scale in np.geomspace(0.05, 4.0, 45):
+                g = (max(1, round(rp * scale)), max(1, round(ri * scale)),
+                     round(rd * scale * dmul), round(rdm * scale * dmul))
+                t.update(**{f"p_{name}": g[0], f"i_{name}": g[1], f"d_{name}": g[2], f"d_max_{name}": max(g[2], g[3])})
+                m, _, _ = evaluate(t, axis, plant, op, 1 / spec.loop_hz, spec.loop_hz)
+                if np.isfinite(m.pm) and m.pm >= target_pm and m.gm_db >= target_gm_db and (best is None or m.fc > best[0]):
+                    best = (m.fc, g)
+        g = best[1] if best else (rp, ri, rd, rdm)
+        g = tuple(max(1, int(round(x * 0.9))) if x else 0 for x in g)
+        t.update(**{f"p_{name}": g[0], f"i_{name}": g[1], f"d_{name}": g[2], f"d_max_{name}": max(g[2], g[3]),
+                    f"f_{name}": 100})
     return t
+
+
+def _pilot_profile(spec: CraftSpec, n: int, dt: float, rng) -> tuple[np.ndarray, np.ndarray]:
+    """Freestyle-like stick and throttle inputs: rate steps on all axes, punch-outs and chops."""
+    sp = np.zeros((n, 3))
+    thr = np.zeros(n)
+    t = 0
+    level = spec.hover_throttle
+    while t < n:
+        seg = int(rng.uniform(0.25, 0.6) / dt)
+        target = rng.choice([0.05, spec.hover_throttle, 0.5, 0.75, 0.95], p=[0.2, 0.35, 0.2, 0.15, 0.1])
+        ramp = np.linspace(level, target, min(seg, n - t))
+        thr[t : t + len(ramp)] = ramp
+        level = target
+        ax = rng.integers(0, 3)
+        rate = rng.uniform(150, 500) * rng.choice([-1, 1]) * (0.6 if ax == 2 else 1.0)
+        on = int(rng.uniform(0.1, 0.3) / dt)
+        sp[t : t + min(on, n - t), ax] = rate
+        t += seg
+    return sp, np.clip(thr, 0.0, 1.0)
 
 
 def simulate(
@@ -126,14 +182,21 @@ def simulate(
     chirp_repeats: int = 1,
     chirp_s: float = 20.0,
     f0: float = 1.0,
-    f1: float = 200.0,
-    amplitude: tuple[float, float, float] = (230.0, 230.0, 180.0),
+    f1: float | None = None,
+    amplitude: tuple[float, float, float] | None = None,
     hover_s: float = 8.0,
+    freestyle_s: float = 12.0,
     seed: int = 0,
     high_resolution: bool = False,
 ) -> Flight:
-    """Hover + chirp runs at hover throttle. Returns a Flight sampled like a blackbox log."""
+    """Hover, chirp runs at hover throttle, then freestyle (stick steps, punch-outs, chops).
+
+    Returns a Flight sampled like a blackbox log. Chirp end frequency and amplitude default to
+    the craft class (see skills/bf-flight-protocol).
+    """
     rng = np.random.default_rng(seed)
+    f1 = f1 or spec.chirp_f1
+    amplitude = amplitude or spec.chirp_amp
     tune = tune or default_tune(spec)
     dt = 1.0 / spec.loop_hz
     lag, lead = 3.0, 30.0
@@ -144,6 +207,8 @@ def simulate(
         for ax in chirp_axes:
             segs.append((ax, chirp_s))
             segs.append((-1, 1.0))
+    if freestyle_s > 0:
+        segs.append((-2, freestyle_s))
     n_total = int(sum(d for _, d in segs) * spec.loop_hz)
     axis_sched = np.concatenate([np.full(int(d * spec.loop_hz), a) for a, d in segs])[:n_total]
     n_total = len(axis_sched)
@@ -186,7 +251,12 @@ def simulate(
     dn_count = tune.i("dyn_notch_count") if spec.loop_hz >= 2000 else 0
     dn_center = min(max(spec.frame_mode_hz or 0.9 * wh, tune.i("dyn_notch_min_hz")), tune.i("dyn_notch_max_hz"))
     dyn_notches = [[flt.SvfNotch(dn_center, tune.i("dyn_notch_q") / 100.0, dt) for _ in range(dn_count)] for _ in range(3)]
-    tpa = tune.tpa_factor(thr_h)
+    dyn_g = tune.i("gyro_lpf1_dyn_min_hz") > 0
+    dyn_d = tune.i("dterm_lpf1_dyn_min_hz") > 0
+    kf = [tune.kf(a) for a in range(3)]
+    rc_smooth = [flt.PTn(60.0, dt, 3) for _ in range(3)]
+    ff_smooth = [flt.PTn(40.0, dt, 1) for _ in range(3)]
+    prev_sp_rc = [0.0, 0.0, 0.0]
     relax_cut = tune.i("iterm_relax_cutoff")
     relax_axes = {0, 1, 2} if tune.s("iterm_relax").startswith("RPY") else ({0, 1} if tune.s("iterm_relax").startswith("RP") else set())
     relax_lpf = [flt.PTn(relax_cut, dt, 1) for _ in range(3)]
@@ -224,9 +294,31 @@ def simulate(
     frame_noise = rng.normal(0, 1, (n_total, 3)) if frame_bp else None
     thr_wander = thr_h + 0.004 * np.cumsum(rng.normal(0, 1, n_total)) / math.sqrt(spec.loop_hz)
     thr_wander = thr_h + np.clip(thr_wander - thr_h, -0.02, 0.02)
-    sp_pilot = np.zeros(3)
+    n_free = int(np.sum(axis_sched == -2))
+    pilot_sp, pilot_thr = _pilot_profile(spec, max(n_free, 1), dt, rng)
+    free_idx = np.cumsum(axis_sched == -2) - 1
     for n in range(n_total):
         ax_ch = int(axis_sched[n])
+        free = ax_ch == -2
+        if free:
+            ax_ch = -1
+            thr_now = pilot_thr[free_idx[n]]
+            sp_raw = pilot_sp[free_idx[n]]
+        else:
+            thr_now = thr_wander[n]
+            sp_raw = (0.0, 0.0, 0.0)
+        tpa = tune.tpa_factor(thr_now)
+        if n % max(1, int(0.005 * spec.loop_hz)) == 0:  # dyn LPF update (<= every 5 ms)
+            if dyn_g:
+                fc = flt.dyn_lpf_cutoff(tune.i("gyro_lpf1_dyn_min_hz"), tune.i("gyro_lpf1_dyn_max_hz"), tune.i("gyro_lpf1_dyn_expo"), thr_now)
+                for f_ in lpf1:
+                    if hasattr(f_, "set_cutoff"):
+                        f_.set_cutoff(fc, dt)
+            if dyn_d:
+                fc = flt.dyn_lpf_cutoff(tune.i("dterm_lpf1_dyn_min_hz"), tune.i("dterm_lpf1_dyn_max_hz"), tune.i("dterm_lpf1_dyn_expo"), thr_now)
+                for f_ in dlp1:
+                    if hasattr(f_, "set_cutoff"):
+                        f_.set_cutoff(fc, dt)
         # ---- chirp generator (chirp.c) ----
         if ax_ch >= 0:
             if ax_ch != last_axis:
@@ -276,7 +368,10 @@ def simulate(
                 x = dn(x)
             gf = x
             gf_all[a] = gf
-            sp = sp_pilot[a] + (amp[a] * yf if a == ax_ch else 0.0)
+            sp_rc = rc_smooth[a](sp_raw[a])
+            ffv = kf[a] * ff_smooth[a]((sp_rc - prev_sp_rc[a]) / dt)
+            prev_sp_rc[a] = sp_rc
+            sp = sp_rc + (amp[a] * yf if a == ax_ch else 0.0)
             err = sp - gf
             P = kp[a] * err
             if a == 2:
@@ -291,14 +386,14 @@ def simulate(
             dd = dlp2[a](dlp1[a](gf))
             D = -kd[a] * tpa * (dd - prevD[a]) / dt
             prevD[a] = dd
-            s = P + I[a] + D
+            s = P + I[a] + D + ffv
             lim2 = 400 if a == 2 else 500
             u[a] = min(max(s, -lim2), lim2)
             if n % step == 0 and li < n_log:
                 out["setpoint"][li, a] = sp
-                out["P"][li, a], out["I"][li, a], out["D"][li, a] = P, I[a], D
+                out["P"][li, a], out["I"][li, a], out["D"][li, a], out["F"][li, a] = P, I[a], D, ffv
         # ---- mixer + motors ----
-        thr = thr_wander[n]
+        thr = thr_now
         cmd = thr + mix @ (np.array(u) / 1000.0)
         cmd = np.clip(cmd, 0.0, 1.0)
         cmd_hist[1:] = cmd_hist[:-1]
@@ -328,7 +423,9 @@ def simulate(
             out_dbg[li, 2] = round(10 * fch)
             out_dbg[li, 3] = round(1000 * exc)
             li += 1
-    return _to_flight(spec, tune, out, out_motor, out_hz, out_thr, out_dbg, n_log, f0, f1, chirp_s, amp)
+    fl = _to_flight(spec, tune, out, out_motor, out_hz, out_thr, out_dbg, n_log, f0, f1, chirp_s, amp)
+    fl.log.headers["chirp_amplitude_roll"] = str(int(amp[0]))
+    return fl
 
 
 def _to_flight(spec, tune, out, motor, hz, thr, dbg, n, f0, f1, chirp_s, amp) -> Flight:

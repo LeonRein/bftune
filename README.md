@@ -33,12 +33,12 @@ Everything is a port of Betaflight 2026.6 source code; see [docs/model.md](docs/
 
 ## Install
 ```bash
-uv tool install git+https://github.com/<owner>/bftune      # or: pipx install git+https://...
+uv tool install git+https://github.com/LeonRein/bftune      # or: pipx install git+https://...
 bftune --help
 ```
 Claude Code plugin:
 ```
-/plugin marketplace add <owner>/bftune
+/plugin marketplace add LeonRein/bftune
 /plugin install bftune@bftune
 ```
 
@@ -49,7 +49,12 @@ bftune analyze  LOG00001.BFL --dump dump.txt -o out/
 bftune optimize -o out/ --style freestyle --safe-log OLD_TUNE.BFL   # optional: a tune that flew with cool motors
 # -> out/tune_cli.txt, out/revert_cli.txt, out/report.md, plots
 bftune evaluate -o out/ my_hand_edits.txt                         # score any CLI changes on the model
+bftune all LOG00001.BFL --dump dump.txt -o out/                   # analyze + optimize in one go
+bftune synth 5inch -o twin.pkl --truth                            # synthetic test flight with known truth
 ```
+`optimize` prints a **VERDICT** (PASS/FAIL of every robustness constraint). Never fly a FAIL tune
+without understanding the listed violations. `analysis.pkl`/synthetic `.pkl` files are Python pickles:
+only load files you created yourself.
 
 ## Recording the flight (summary)
 Firmware 2026.6+ with `USE_CHIRP`, a CHIRP mode switch and `set debug_mode = CHIRP`. Hover in

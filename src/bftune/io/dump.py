@@ -140,6 +140,14 @@ _ENUM_HEADERS = {
     "dshot_bidir": {"0": "OFF", "1": "ON"},
     "rc_smoothing": {"0": "OFF", "1": "ON"},
     "blackbox_high_resolution": {"0": "OFF", "1": "ON"},
+    "simplified_pids_mode": {"0": "OFF", "1": "RP", "2": "RPY"},
+    "simplified_dterm_filter": {"0": "OFF", "1": "ON"},
+    "simplified_gyro_filter": {"0": "OFF", "1": "ON"},
+    "tpa_low_always": {"0": "OFF", "1": "ON"},
+    "use_integrated_yaw": {"0": "OFF", "1": "ON"},
+    "dshot_edt": {"0": "OFF", "1": "ON", "2": "FORCE"},
+    "rates_type": {"0": "BETAFLIGHT", "1": "RACEFLIGHT", "2": "KISS", "3": "ACTUAL", "4": "QUICK"},
+    "mixer_type": {"0": "LEGACY", "1": "LINEAR", "2": "DYNAMIC", "3": "EZLANDING"},
 }
 
 

@@ -95,16 +95,18 @@ def fr_lowpass(ftype: str, fc: float, f: np.ndarray, dt: float) -> np.ndarray:
     raise ValueError(f"unknown filter type {ftype}")
 
 
-def dyn_lpf_cutoff(fmin: float, fmax: float, expo: int, throttle: float) -> float:
+def dyn_lpf_cutoff(fmin: float, fmax: float, expo: int, throttle: float, svf_dt: float | None = None) -> float:
     """dynLpfCutoffFreq() in pid.c (used by gyro and D-term dynamic lowpass)."""
     t = min(max(round(throttle * 100) / 100.0, 0.0), 1.0)
     if expo > 0:
         e = expo / 10.0
         curve = t * (1 - t) * e + t
-        return (fmax - fmin) * curve + fmin
-    # expo == 0 legacy curve
-    dyn_thr = 1.5 * t * (1 - t * t / 3.0)
-    return max(dyn_thr * fmax, fmin)
+        fc = (fmax - fmin) * curve + fmin
+        return fc if svf_dt is None else min(fc, 0.475 / svf_dt)
+    else:  # expo == 0 legacy curve
+        dyn_thr = 1.5 * t * (1 - t * t / 3.0)
+        fc = max(dyn_thr * fmax, fmin)
+        return fc if svf_dt is None else min(fc, 0.475 / svf_dt)  # SVF cutoff clamp (gyro.c / pid.c)
 
 
 def phase_comp_coeffs(center_hz: float, center_phase_deg: float, dt: float) -> tuple[float, float, float]:

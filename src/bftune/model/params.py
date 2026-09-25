@@ -44,7 +44,7 @@ DEFAULTS: dict[str, int | str] = {
     "pidsum_limit": 500, "pidsum_limit_yaw": 400, "vbat_sag_compensation": 0,
     "motor_output_limit": 100, "use_integrated_yaw": "OFF",
     "simplified_pids_mode": "RPY", "simplified_dterm_filter": "ON", "simplified_gyro_filter": "ON",
-    "motor_poles": 14, "motor_kv": 1960,
+    "motor_poles": 14, "motor_kv": 1960, "pid_process_denom": 1, "dshot_bidir": "ON",
 }
 
 AXIS = ("roll", "pitch", "yaw")

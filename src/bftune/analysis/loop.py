@@ -102,7 +102,8 @@ def rc_path_fr(tune: Tune, f: np.ndarray, rx_hz: float, dt: float, axis: int = 0
     lagged moving average over feedforward_averaging+1 frames. Frames are held until the
     next packet (ZOH), then setpoint and ff are PT3-smoothed at the RC-smoothing cutoff.
     Returns H_sp (deg/s per deg/s) and H_ff (deg/s^2 per deg/s) so that F = Kf * H_ff * stick.
-    The jitter attenuator is taken as 1 (sticks moving) and yaw hold is ignored.
+    The jitter attenuator is taken as 1 (sticks moving); feedforward_max_rate_limit is not
+    modelled, so stick tests must stay well below the craft's max rate.
     """
     Tr = 1.0 / rx_hz
     s = 2j * np.pi * f
@@ -123,7 +124,14 @@ def rc_path_fr(tune: Tune, f: np.ndarray, rx_hz: float, dt: float, axis: int = 0
         boost = tune.i("feedforward_boost") * 0.001
         ff = S * (1 + boost * rx_hz * Hs * (1 - zr1))
     else:
-        ff = S
+        # yaw: no boost, plus the yaw-hold element G*(sp - PT1(sp)) (rc.c; gain rescaled below 100 ms, pid_init.c)
+        hold_t = tune.i("feedforward_yaw_hold_time")
+        gain = tune.i("feedforward_yaw_hold_gain") * (150.0 / (hold_t + 50) if hold_t < 100 else 1.0)
+        if gain > 0 and hold_t > 0:
+            kh = Tr / (Tr + hold_t / 1000.0)
+            ff = S + gain * (1 - kh / (1 - (1 - kh) * zr1))
+        else:
+            ff = S
     avg = {"OFF": 0, "2_POINT": 1, "3_POINT": 2, "4_POINT": 3}.get(tune.s("feedforward_averaging"), 0) + 1
     H_avg = sum(zr1**j for j in range(avg)) / avg
     H_ff = ff * H_avg * zoh * pt3

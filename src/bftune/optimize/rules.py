@@ -28,6 +28,15 @@ def rx_rate_hz(fl: Flight) -> float:
     return float(v) if v > 0 else 250.0
 
 
+def max_rate(fl: Flight, axis: int) -> float:
+    """Max stick rate [deg/s] from the rate profile (ACTUAL rates; conservative fallback 670)."""
+    ax = AXES[axis]
+    c = fl.cfg
+    if c.str("rates_type", "ACTUAL").upper() == "ACTUAL" and c.get(f"{ax}_srate") is not None:
+        return float(max(c.int(f"{ax}_rc_rate") * 10, c.int(f"{ax}_srate") * 10))
+    return 670.0
+
+
 def tune_feedforward(fl: Flight, idn: Identification, tune: Tune, style: str = "freestyle",
                      overshoot_max: float | None = None) -> list[Decision]:
     """Pick F per axis: minimum tracking lag for a fast stick move without exceeding the
@@ -51,6 +60,8 @@ def tune_feedforward(fl: Flight, idn: Identification, tune: Tune, style: str = "
 
         pl = Plant(plant.structure, p)
         f_ideal = 1.0 / (p["K"] * FEEDFORWARD_SCALE * 0.01)
+        # stay below the feedforward_max_rate_limit region (clips FF near max rate, not modelled)
+        a_fast = min(600.0, 0.6 * max_rate(fl, axis))
         best = None
         rows = []
         for F in range(40, 261, 5):
@@ -58,7 +69,7 @@ def tune_feedforward(fl: Flight, idn: Identification, tune: Tune, style: str = "
             # a crisp flick (300 deg/s in 50 ms) and a full-rate snap (600 deg/s in 30 ms)
             m1 = step_metrics(step_response(t, axis, pl, op, idn.dt, fl.loop_hz, rx, amplitude=300, ramp_s=0.05,
                                             time_scale=idn.time_scale))
-            m2 = step_metrics(step_response(t, axis, pl, op, idn.dt, fl.loop_hz, rx, amplitude=600, ramp_s=0.03,
+            m2 = step_metrics(step_response(t, axis, pl, op, idn.dt, fl.loop_hz, rx, amplitude=a_fast, ramp_s=0.03,
                                             time_scale=idn.time_scale))
             ov = max(m1["overshoot_pct"], m2["overshoot_pct"])
             lag = 0.5 * (m1["tracking_lag_ms"] + m2["tracking_lag_ms"])
@@ -73,7 +84,7 @@ def tune_feedforward(fl: Flight, idn: Identification, tune: Tune, style: str = "
                       f"(reaction torque), so FF mainly speeds the first 50 ms; modelled overshoot {ov:.0f}%, lag {lag:.1f} ms")
         else:
             reason = (f"minimum tracking lag ({lag:.1f} ms) with ≤{target:.0f}% overshoot on 300°/s-in-50ms and "
-                      f"600°/s-in-30ms stick moves (modelled {ov:.0f}%); physics ideal F≈{f_ideal:.0f}")
+                      f"{a_fast:.0f}°/s-in-30ms stick moves (modelled {ov:.0f}%); physics ideal F≈{f_ideal:.0f}")
         out.append(Decision(f"f_{ax}", str(int(F)), reason))
     return out
 
@@ -105,6 +116,12 @@ def judgement(fl: Flight, idn: Identification, tune: Tune, style: str = "freesty
             out.append(Decision("dyn_idle_min_rpm", str(val),
                                 f"natural idle ≈{rpm:.0f} rpm; floor at 90% keeps motor authority during dives and "
                                 f"flips (propwash) without raising normal idle"))
+    # RPM filter weights: every harmonic that exists in gyroUnfilt should be notched at full depth;
+    # a notch at >= 2x the motor frequency costs < 0.5 deg of phase at crossover.
+    if tune.values.get("rpm_filter_weights") != "100,100,100" and tune.i("rpm_filter_harmonics") > 0:
+        out.append(Decision("rpm_filter_weights", "100,100,100",
+                            "motor harmonics are visible in the unfiltered gyro; full-depth RPM notches cost "
+                            "almost no phase at crossover"))
     # I-term relax cutoff: lower = less bounce-back after flips, higher = tighter tracking
     relax = {"race": 20, "freestyle": 15, "cinematic": 10}.get(style, 15)
     if tune.i("iterm_relax_cutoff") != relax:

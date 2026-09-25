@@ -33,15 +33,23 @@ class MotorModel:
     g0: float = 0.0  # gain(hz) = g0 + g1*hz  [motor Hz per unit command]
     g1: float = 0.0
 
+    def _clamp(self, hz):
+        # never extrapolate the fitted lines beyond the speeds actually flown
+        return np.clip(np.asarray(hz, dtype=float), self.bins_hz.min(), self.bins_hz.max())
+
     def tau_at(self, hz: float | np.ndarray) -> np.ndarray:
-        return 1.0 / (self.c0 + self.c1 * np.asarray(hz, dtype=float))
+        return 1.0 / (self.c0 + self.c1 * self._clamp(hz))
 
     def gain_at(self, hz: float | np.ndarray) -> np.ndarray:
-        return np.maximum(self.g0 + self.g1 * np.asarray(hz, dtype=float), 1e-6)
+        g = self.g0 + self.g1 * self._clamp(hz)
+        return np.maximum(g, 0.2 * float(np.min(self.gain)))
 
     def authority_ratio(self, hz: float, ref_hz: float) -> float:
-        """Relative torque authority d(thrust)/d(cmd) ∝ omega * domega/dcmd."""
+        """Relative torque authority d(thrust)/d(cmd) ∝ omega * domega/dcmd (thrust ∝ omega²)."""
         return float(hz * self.gain_at(hz) / (ref_hz * self.gain_at(ref_hz)))
+
+    def covers(self, hz: float, margin: float = 0.15) -> bool:
+        return self.bins_hz.min() * (1 - margin) <= hz <= self.bins_hz.max() * (1 + margin)
 
     def tau_ratio(self, hz: float, ref_hz: float) -> float:
         return float(self.tau_at(hz) / self.tau_at(ref_hz))

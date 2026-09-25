@@ -38,8 +38,8 @@ def rpm_notch_fr(tune: Tune, op: OperatingPoint, f: np.ndarray, dt: float) -> np
     """Product of all RPM notches (rpm_filter.c) at the given motor frequencies."""
     h = np.ones_like(f, dtype=complex)
     harmonics = tune.i("rpm_filter_harmonics")
-    if harmonics <= 0:
-        return h
+    if harmonics <= 0 or str(tune.values.get("dshot_bidir", "ON")).upper() in ("OFF", "0"):
+        return h  # RPM filter needs bidirectional DShot telemetry (rpm_filter.c)
     weights = tune.ints("rpm_filter_weights")
     q = tune.i("rpm_filter_q") / 100.0
     fmin = tune.i("rpm_filter_min_hz")
@@ -51,7 +51,7 @@ def rpm_notch_fr(tune: Tune, op: OperatingPoint, f: np.ndarray, dt: float) -> np
             if w <= 0:
                 continue
             fc = min(max(hn * mhz, fmin), nyq_lim)
-            fade_w = min(max((fc - fmin) / fade, 0.0), 1.0) if fade > 0 else (1.0 if fc > fmin else 0.0)
+            fade_w = min(max((fc - fmin) / fade, 0.0), 1.0) if fade > 0 else 1.0
             w *= fade_w
             if w <= 0:
                 continue
@@ -93,7 +93,14 @@ def dterm_lpf1_hz(tune: Tune, throttle: float) -> float:
 def gyro_chain_fr(tune: Tune, op: OperatingPoint, f: np.ndarray, dt: float, loop_hz: float | None = None) -> np.ndarray:
     """gyroUnfilt -> gyroADCf: lpf2 -> RPM notches -> static notches -> lpf1 -> dyn notch."""
     loop_hz = loop_hz or 1.0 / dt
-    h = flt.fr_lowpass(tune.s("gyro_lpf2_type"), tune.i("gyro_lpf2_static_hz"), f, dt)
+    denom = max(1, tune.i("pid_process_denom")) if "pid_process_denom" in tune.values else 1
+    dt_g = dt / denom  # lpf2 runs at the gyro sample rate (gyro.c gyroUpdate)
+    if tune.i("gyro_lpf2_static_hz") > 0:
+        h = flt.fr_lowpass(tune.s("gyro_lpf2_type"), tune.i("gyro_lpf2_static_hz"), f, dt_g)
+    else:
+        # downsampling by averaging the gyro samples of one PID period (gyro_filter_impl.c)
+        zg = flt.zinv(f, dt_g)
+        h = sum(zg**k for k in range(denom)) / denom
     h = h * rpm_notch_fr(tune, op, f, dt)
     for n in (1, 2):
         hz, cut = tune.i(f"gyro_notch{n}_hz"), tune.i(f"gyro_notch{n}_cutoff")

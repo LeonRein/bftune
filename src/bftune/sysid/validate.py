@@ -123,6 +123,8 @@ def replay(
             R = np.fft.rfft(r0, nfft)
             FF = np.fft.rfft(F0, nfft)
             ypred = np.fft.irfft(G * (C.Cr * R + FF) / den, nfft)[:n] + y[0]
+            if np.std(y[pad:]) < 15.0:  # no real maneuvering: gyro noise dominates, fit % meaningless
+                continue
             ys.append(y[pad:])
             ps.append(ypred[pad:])
             ts.append(fl.t[s:e])

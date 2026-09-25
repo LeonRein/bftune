@@ -138,7 +138,11 @@ def identify(
         # coherent band: contiguous from f_lo
         coh_to = frf.f[use].max() if use.any() else f_lo
         w = weights_from_coherence(frf.coh["y"], frf.coh["u"], frf.valid_frac) * use
-        best, fits = fit_best(frf.f, G, w, structures[axis])
+        try:
+            best, fits = fit_best(frf.f, G, w, structures[axis])
+        except ValueError as e:
+            notes.append(f"{AXES[axis]}: identification failed: {e}")
+            continue
         # chain check where both gyro signals are coherent. The dyn-notch centre is not
         # logged, so scan it and keep the best match (also gives an estimate of where it sits).
         mfg = use & (frf.coh["yf"] >= 0.8)
@@ -181,5 +185,14 @@ def identify(
             G_meas_f=Gf,
             coherent_to_hz=float(coh_to),
         )
+    if motor is not None:
+        for a, ai in axes.items():
+            t_ax = ai.plant.params["tau"]
+            t_mm = float(motor.tau_at(np.mean(ai.op.motor_hz)))
+            if abs(t_mm / t_ax - 1) > 0.5:
+                notes.append(
+                    f"{AXES[a]}: motor-model tau {t_mm*1000:.0f} ms vs axis fit {t_ax*1000:.0f} ms (>50% apart); only the "
+                    "motor model's *trend* with speed is used for scheduling"
+                )
     return Identification(axes=axes, motor=motor, runs=runs, dt=dt, time_scale=time_scale, notes=notes,
                           thrust_linear=tune.i("thrust_linear"))

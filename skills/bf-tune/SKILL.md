@@ -14,7 +14,7 @@ best disturbance rejection under robust stability margins and a motor-noise budg
 - Bidirectional DShot (RPM telemetry) strongly recommended.
 - A blackbox log with chirp runs on roll, pitch and yaw (see `bf-flight-protocol`), plus the CLI
   `dump` (or `diff all`) taken with the same settings.
-- Install: `uv tool install git+https://github.com/<owner>/bftune` (or `pipx install ...`); in a
+- Install: `uv tool install git+https://github.com/LeonRein/bftune` (or `pipx install ...`); in a
   checkout: `uv run bftune ...`.
 
 ## Workflow

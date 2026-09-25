@@ -65,6 +65,12 @@ def fit_structure(
     x0 = np.clip(x0, np.array(lo) + 1e-12, np.array(hi) - 1e-12)
     ok = np.isfinite(G) & (w > 0)
     ff, GG, ww = f[ok], G[ok], w[ok]
+    if len(ff) < len(names) + 2:
+        raise ValueError(
+            f"only {len(ff)} usable frequency bands for the plant fit: the chirp data is not coherent "
+            "or the motors saturated during the chirp (check 'motors at 100%' warnings, lower chirp "
+            "amplitude, fly the chirp at hover)"
+        )
 
     def resid(x):
         p = dict(zip(names, x))

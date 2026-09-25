@@ -344,6 +344,9 @@ def _decode_one(data: bytes, index: int, start: int, end: int) -> Log:
 
     prev: list[int] | None = None
     prev2: list[int] | None = None
+    gps_home = [0, 0]
+    gdef = defs.get("G")
+    gps_coord_idx = gdef.names.index("GPS_coord[0]") if gdef and "GPS_coord[0]" in gdef.names else None
     valid = False
     last_iter = -1
     last_time = -1
@@ -379,7 +382,12 @@ def _decode_one(data: bytes, index: int, start: int, end: int) -> Log:
             if p == PRED_VBATREF:
                 return value + vbatref
             if p == PRED_LAST_MAIN_FRAME_TIME:
-                return value + (prev_[TIME] if prev_ is not None else 0)
+                last = rows[-1][TIME] if rows else 0
+                return value + last
+            if p == PRED_HOME_COORD:
+                # GPS_coord[0/1] relative to the last GPS home frame (blackbox.c)
+                k = 0 if gps_coord_idx is None or idx == gps_coord_idx else 1
+                return value + gps_home[k]
             raise ValueError(f"Unsupported predictor {p}")
 
         while i < n:
@@ -569,6 +577,8 @@ def _decode_one(data: bytes, index: int, start: int, end: int) -> Log:
         elif cmd in ("G", "H"):
             tmp = [0] * defs[cmd].count
             parse_frame(defs[cmd], None, None, 0, tmp)
+            if cmd == "H" and len(tmp) >= 2:
+                gps_home[0], gps_home[1] = tmp[0], tmp[1]
         elif cmd == "E":
             pending_event = parse_event()
         if s.eof:

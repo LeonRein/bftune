@@ -22,6 +22,21 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
     L.append("")
     L.append(f"Firmware {an.firmware or '?'} · log `{Path(an.log_path).name}` · style **{result['style']}** · {dt.date.today().isoformat()}")
     L.append("")
+    v = result.get("verdict")
+    if v:
+        L.append(f"## Verdict: **{v}**")
+        L.append("")
+        if v == "PASS":
+            L.append("The model predicts that every robustness constraint (phase margin, gain margin, peak sensitivity, "
+                     "delay margin) is met at idle, hover, mid and full throttle, with battery and delay variations, "
+                     "and that motor noise stays within the proven-safe budget.")
+        else:
+            L.append("**The model predicts violated constraints. Review before flying:**")
+            L += [f"- {ax}: {x}" for ax, xs in result.get("violations", {}).items() for x in xs]
+        if not result.get("noise_model", True):
+            L.append("")
+            L.append("**No noise model** - motor noise/heat was not checked.")
+        L.append("")
     if an.warnings:
         L.append("## Warnings")
         L += [f"- {w}" for w in an.warnings]
@@ -52,9 +67,10 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
     for name, per in result["evaluation"].items():
         for ax, e in per.items():
             h, i, fu, w = e["hover"], e["idle"], e["full"], e["worst"]
+            nb = _f(e["noise_vs_budget"], "{:.2f}") if result.get("noise_model", True) else "n/a"
             L.append(f"| {ax} | {name} | {_f(h['fc'])} Hz | {_f(h['pm'], '{:.0f}')}° | {_f(h['gm_db'])} dB | {_f(h['ms'], '{:.2f}')} | "
                      f"{_f(i['fc'])} Hz | {_f(fu['pm'], '{:.0f}')}° | {_f(w['pm'], '{:.0f}')}° | {_f(w['ms'], '{:.2f}')} | "
-                     f"{_f(e['noise_vs_budget'], '{:.2f}')} |")
+                     f"{nb} |")
     L.append("")
     st = result.get("step", {})
     if st:

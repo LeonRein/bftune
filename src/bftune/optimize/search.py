@@ -232,7 +232,11 @@ class AxisProblem:
             pm_min = g.pm_min_robust if c.robust else g.pm_min
             gm_min = g.gm_min_robust_db if c.robust else g.gm_min_db
             ms_max = g.ms_max_robust if c.robust else g.ms_max
-            pm = M.pm if np.isfinite(M.pm) else -90.0
+            if not np.isfinite(M.pm):
+                # no gain crossover: loop gain < 1 everywhere (no authority) or > 1 everywhere
+                pm = 90.0 if np.max(np.abs(L)) < 1 else -90.0
+            else:
+                pm = M.pm
             penalty += max(0.0, pm_min - pm) ** 2 / 25.0
             penalty += max(0.0, gm_min - M.gm_db) ** 2
             penalty += 100 * max(0.0, M.ms - ms_max) ** 2
@@ -250,7 +254,7 @@ class AxisProblem:
             if not c.robust:
                 worst["dm"] = min(worst["dm"], M.dm_ms)
             if detail:
-                rows.append({"case": c.label, **M.as_dict()})
+                rows.append({"case": c.label, "robust": c.robust, **M.as_dict(), "pm_eff": pm})
         obj /= max(wsum, 1e-9)
         nr = 0.0
         if self.noise_Q is not None and self.noise_ref is not None:
@@ -285,7 +289,8 @@ def optimize_axis(prob: AxisProblem, tune: Tune, seed: int = 0, maxiter: int = 5
     Ii = int(round(ip * P))
     Dmi = max(int(round(D * R)), Di) if Di > 0 else 0
     total, obj, pen, worst, nr, rows = prob.evaluate(Pi, Ii, Di, (Dmi / Di) if Di > 0 else 1.0, detail=True)
-    return AxisResult(prob.axis, Pi, Ii, Di, Dmi, total, pen < 1e-2, worst, nr, rows)
+    feasible = not violations(rows, prob.goals, nr if prob.noise_Q is not None and prob.noise_ref is not None else None)
+    return AxisResult(prob.axis, Pi, Ii, Di, Dmi, total, feasible, worst, nr, rows)
 
 
 def apply_axis(tune: Tune, r: AxisResult) -> Tune:
@@ -414,7 +419,8 @@ def candidate_moves(t: Tune) -> list[tuple[str, dict]]:
 
 def global_search(fl, idn, nm, tune0: Tune, goals: Goals, passes: int = 2, maxiter: int = 30,
                   log=print, fixed: dict | None = None, safe_tunes: list[Tune] | None = None,
-                  noise_ref: dict | None = None, hf_ref: tuple[float, float] | None = None) -> SearchResult:
+                  noise_ref: dict | None = None, hf_ref: tuple[float, float] | None = None,
+                  verbose: bool = False) -> SearchResult:
     if noise_ref is None and nm is not None:
         noise_ref = reference_noise(nm, [tune0] + list(safe_tunes or []), fl.loop_hz, idn)
     if hf_ref is None:
@@ -445,8 +451,8 @@ def global_search(fl, idn, nm, tune0: Tune, goals: Goals, passes: int = 2, maxit
                     apply_axis(tune, r)
                 history.append((name, sc))
                 improved = True
-                log(f"  pass {p+1}: accept {name:22s} -> score {sc:.3f}")
-            else:
+                log(f"  pass {p+1}: accept {name:22s} -> score {sc:.3f}{tag}")
+            elif verbose:
                 log(f"  pass {p+1}: reject {name:22s}    score {sc:.3f}{tag}")
         if not improved:
             break
@@ -457,7 +463,7 @@ FILTER_KEYS = (
     "gyro_lpf1_type", "gyro_lpf1_static_hz", "gyro_lpf1_dyn_min_hz", "gyro_lpf1_dyn_max_hz", "gyro_lpf1_dyn_expo",
     "gyro_lpf2_type", "gyro_lpf2_static_hz", "dterm_lpf1_type", "dterm_lpf1_static_hz", "dterm_lpf1_dyn_min_hz",
     "dterm_lpf1_dyn_max_hz", "dterm_lpf1_dyn_expo", "dterm_lpf2_type", "dterm_lpf2_static_hz", "dyn_notch_count",
-    "dyn_notch_q", "dyn_notch_min_hz", "dyn_notch_max_hz", "rpm_filter_q", "rpm_filter_weights", "tpa_mode",
+    "dyn_notch_q", "dyn_notch_min_hz", "dyn_notch_max_hz", "rpm_filter_q", "tpa_mode",
     "tpa_rate", "tpa_breakpoint", "yaw_lowpass_hz",
 )
 
@@ -481,3 +487,26 @@ def multi_start_search(fl, idn, nm, tune0: Tune, goals: Goals, seeds: dict[str, 
         if best is None or r.score < best.score:
             best = r
     return best, results
+
+
+def violations(rows: list[dict], goals: Goals, noise_ratio: float | None = None) -> list[str]:
+    """Human-readable list of violated constraints for one axis (empty = all met)."""
+    out = []
+    for r in rows:
+        rob = r.get("robust", False)
+        pm_min = goals.pm_min_robust if rob else goals.pm_min
+        gm_min = goals.gm_min_robust_db if rob else goals.gm_min_db
+        ms_max = goals.ms_max_robust if rob else goals.ms_max
+        pm = r.get("pm_eff", r["pm"])
+        bad = []
+        if pm < pm_min - 0.5:
+            bad.append(f"PM {pm:.0f}°<{pm_min:.0f}°")
+        if r["gm_db"] < gm_min - 0.2:
+            bad.append(f"GM {r['gm_db']:.1f}<{gm_min:.0f} dB")
+        if r["ms"] > ms_max + 0.02:
+            bad.append(f"Ms {r['ms']:.2f}>{ms_max:.1f}")
+        if bad:
+            out.append(f"{r['case']}: " + ", ".join(bad))
+    if noise_ratio is not None and noise_ratio > goals.noise_budget * 1.02:
+        out.append(f"motor noise {noise_ratio:.2f}x budget")
+    return out

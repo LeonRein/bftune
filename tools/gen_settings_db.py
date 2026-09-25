@@ -17,7 +17,6 @@ import re
 import sys
 from pathlib import Path
 
-
 # enum names whose lookup array does not follow the TABLE_FOO -> lookupTableFoo convention
 ALIASES = {
     "TABLE_GYRO_LPF_TYPE": "lookupTableLowpassType",
@@ -115,7 +114,7 @@ def main() -> None:
     # match TABLE_FOO_BAR -> lookupTableFooBar by normalized name (robust to #ifdef skew)
     norm = {re.sub(r"^lookupTable", "", a).lower(): a for a in table_arrays}
     tables = {}
-    for i, enum_name in enumerate(table_enum):
+    for enum_name in table_enum:
         key = enum_name[len("TABLE_"):].replace("_", "").lower()
         arr = norm.get(key)
         if arr is None:

@@ -33,7 +33,7 @@ def changed_keys(old: Tune, new: Tune) -> list[str]:
 def cli_block(
     old: Tune,
     new: Tune,
-    profile: int = 0,
+    profile: int | None = 0,
     craft: str | None = None,
     firmware: str | None = None,
     extra_comment: list[str] | None = None,
@@ -50,6 +50,7 @@ def cli_block(
         tmp.values[k] = v
     all_keys = list(dict.fromkeys(list(guard) + keys))
     problems = validate(tmp, all_keys, version)
+    problems += [f"revert: {p}" for p in validate(old, [k for k in all_keys if k in old.values], version)]
 
     def block(values: Tune, header: list[str]) -> str:
         master = [k for k in all_keys if db.get(k, {}).get("scope") == "master"]
@@ -59,7 +60,10 @@ def cli_block(
         for k in master:
             lines.append(f"set {k} = {values.values.get(k, old.values.get(k, ''))}")
         if prof:
-            lines.append(f"profile {profile}")
+            if profile is not None:
+                lines.append(f"profile {profile}")
+            else:
+                lines.append("# PID profile settings: select the profile you fly FIRST (profile index unknown without a dump)")
             for k in prof:
                 lines.append(f"set {k} = {values.values.get(k, old.values.get(k, ''))}")
         if rate:
