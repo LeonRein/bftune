@@ -41,7 +41,7 @@ class Goals:
     gm_min_db: float = 6.0
     gm_min_robust_db: float = 4.0
     dm_min_ms: float = 1.0  # delay margin (nominal)
-    noise_budget: float = 1.3  # motor noise vs current tune (per band, per axis)
+    noise_budget: float = 0.9  # motor noise vs the proven-safe level (10 % margin below it)
     perf_band: tuple[float, float] = (3.0, 60.0)
     idle_weight: float = 0.6  # propwash: weight of the idle case in the objective
     max_i_zero_ratio: float = 0.2  # I zero frequency <= ratio * crossover
@@ -50,6 +50,10 @@ class Goals:
     # the linear model cannot score well; defaults follow proven freestyle ratios.
     i_over_p: tuple[float, float, float] = (1.5, 1.5, 1.6)
     hf_extrapolation: float = 1.25  # max 1-3 kHz filter gain relative to the least-filtered safe tune
+    tracking_weight: float = 0.5  # weight of setpoint-tracking error (1-15 Hz, without FF) in the objective
+    tracking_band: tuple[float, float] = (1.0, 15.0)
+    d_over_p: tuple[float, float] = (0.4, 1.2)  # allowed D/P ratio (Betaflight units) on roll/pitch
+    gain_range: tuple[float, float] = (0.5, 2.5)  # P and D relative to the logged (anchor) tune
 
     @classmethod
     def for_style(cls, style: str, noise_budget: float | None = None) -> Goals:
@@ -58,7 +62,7 @@ class Goals:
             g.ms_max, g.pm_min, g.perf_band, g.idle_weight = 2.1, 42.0, (5.0, 80.0), 0.3
             g.i_over_p = (1.7, 1.7, 1.7)
         elif style == "cinematic":
-            g.ms_max, g.pm_min, g.perf_band, g.idle_weight, g.noise_budget = 1.7, 50.0, (2.0, 40.0), 0.8, 1.0
+            g.ms_max, g.pm_min, g.perf_band, g.idle_weight, g.noise_budget = 1.7, 50.0, (2.0, 40.0), 0.8, 0.8
         if noise_budget is not None:
             g.noise_budget = noise_budget
         return g
@@ -164,7 +168,10 @@ class AxisProblem:
         fr = self.f
         perf_m = (fr >= goals.perf_band[0]) & (fr <= goals.perf_band[1])
         self.perf_m = perf_m
-        self.B = []  # per case: (G*bP, G*bI, G*bD_base, G*bD_extra) where bD scales with kd
+        self.B = []  # per case: loop-gain bases (G*Fg*P, G*Fg*I, G*Fg*Fd*D) per unit gain
+        self.R = []  # per case: reference-path bases (G*P, G*I) for setpoint tracking
+        self.trk_m = (fr >= goals.tracking_band[0]) & (fr <= goals.tracking_band[1])
+        self.anchor = None  # (P0, D0) of the logged tune: bounds are relative to it
         for c in cases:
             C = controller_fr(tune, axis, c.op, fr, idn.dt, loop_hz, time_scale=idn.time_scale)
             G = plant_fr(c.plant_structure, c.plant_params, fr)
@@ -178,7 +185,10 @@ class AxisProblem:
             tpa = tune.tpa_factor(c.op.throttle, c.op.tpa_low_active)
             z1 = flt.zinv(fr * idn.time_scale, idn.dt)
             bD = C.Fg * C.Fd * tpa * (1 - z1) / idn.dt  # per unit Kd (boost handled in eval)
+            rP = C.P / kp if kp > 0 else PTERM_SCALE * np.ones_like(fr, dtype=complex)
+            rI = C.I / ki if ki > 0 else ITERM_SCALE * idn.dt / (1 - z1)
             self.B.append((G * bP, G * bI, G * bD))
+            self.R.append((G * rP, G * rI))
         # noise quadratic forms per band: ∫S|kp bP + kd bD|^2 (HF, base D)
         self.noise_Q = None
         self.noise_ref = noise_ref
@@ -225,13 +235,14 @@ class AxisProblem:
         rows = []
         worst = {"pm": 999.0, "gm": 999.0, "ms": 0.0, "dm": 999.0}
         fc_nom = []
-        for c, (gp, gi, gd) in zip(self.cases, self.B):
+        for c, (gp, gi, gd), (rp, ri) in zip(self.cases, self.B, self.R):
             kd_eff = kd * (1 + c.op.d_boost * (dmax_ratio - 1))
             L = kp * gp + ki * gi + kd_eff * gd
             M = metrics(self.f, L)
-            pm_min = g.pm_min_robust if c.robust else g.pm_min
-            gm_min = g.gm_min_robust_db if c.robust else g.gm_min_db
-            ms_max = g.ms_max_robust if c.robust else g.ms_max
+            # small internal safety margin so integer rounding cannot push the result over a limit
+            pm_min = (g.pm_min_robust if c.robust else g.pm_min) + 1.5
+            gm_min = (g.gm_min_robust_db if c.robust else g.gm_min_db) + 0.3
+            ms_max = (g.ms_max_robust if c.robust else g.ms_max) - 0.04
             if not np.isfinite(M.pm):
                 # no gain crossover: loop gain < 1 everywhere (no authority) or > 1 everywhere
                 pm = 90.0 if np.max(np.abs(L)) < 1 else -90.0
@@ -245,6 +256,11 @@ class AxisProblem:
             if c.weight > 0:
                 S = 1 / (1 + L[self.perf_m])
                 obj += c.weight * float(np.mean(20 * np.log10(np.abs(S))))
+                # setpoint tracking by the feedback loop alone (P+I; FF comes on top): penalizes
+                # D-only loops that reject disturbances but neither hold attitude nor track
+                m = self.trk_m
+                E = 1 - (kp * rp[m] + ki * ri[m]) / (1 + L[m])
+                obj += c.weight * g.tracking_weight * float(np.mean(20 * np.log10(np.abs(E) + 1e-6)))
                 wsum += c.weight
                 if np.isfinite(M.fc):
                     fc_nom.append(M.fc)
@@ -256,10 +272,14 @@ class AxisProblem:
             if detail:
                 rows.append({"case": c.label, "robust": c.robust, **M.as_dict(), "pm_eff": pm})
         obj /= max(wsum, 1e-9)
+        if self.axis < 2 and P > 0 and D > 0:
+            r = D / P
+            lo, hi = g.d_over_p
+            penalty += 20 * (max(0.0, lo - r) ** 2 + max(0.0, r - hi) ** 2)
         nr = 0.0
         if self.noise_Q is not None and self.noise_ref is not None:
             nr = float(np.max(self.noise(kp, kd) / np.maximum(self.noise_ref, 1e-9)))
-            penalty += 50 * max(0.0, nr - g.noise_budget) ** 2
+            penalty += 2000 * max(0.0, nr - 0.97 * g.noise_budget) ** 2
         total = obj + penalty
         if detail:
             return total, obj, penalty, worst, nr, rows
@@ -273,8 +293,11 @@ def optimize_axis(prob: AxisProblem, tune: Tune, seed: int = 0, maxiter: int = 5
     dm0 = tune.i(f"d_max_{ax}")
     ip = prob.goals.i_over_p[prob.axis]
     yaw_no_d = prob.axis == 2 and D0 == 0
-    bP = (max(5.0, 0.4 * P0), min(250.0 / max(ip, 1), 3.0 * P0))
-    bD = (0.0, 1e-9) if yaw_no_d else (max(5.0, 0.4 * D0), min(200.0, 3.5 * D0))
+    # bounds relative to the *logged* tune (anchor), never to the evolving search state
+    Pa, Da = prob.anchor if prob.anchor else (P0, D0)
+    lo, hi = prob.goals.gain_range
+    bP = (max(10.0, lo * Pa), min(250.0 / max(ip, 1), hi * Pa))
+    bD = (0.0, 1e-9) if yaw_no_d else (max(8.0, lo * Da), min(200.0, hi * Da))
     bR = (1.0, 1.0 + 1e-9) if yaw_no_d else (1.0, prob.goals.dmax_ratio_max)
 
     def fun(x):
@@ -282,6 +305,7 @@ def optimize_axis(prob: AxisProblem, tune: Tune, seed: int = 0, maxiter: int = 5
 
     bounds = [bP, bD, bR]
     init = np.clip([P0, D0, max(1.0, dm0 / D0) if D0 > 0 else 1.0], [b[0] for b in bounds], [b[1] for b in bounds])
+    init = np.minimum(np.maximum(init, [b[0] for b in bounds]), [b[1] - 1e-9 for b in bounds])
     res = differential_evolution(fun, bounds, seed=seed, maxiter=maxiter, popsize=12, tol=1e-6, polish=True,
                                  x0=init, updating="deferred")
     P, D, R = res.x
@@ -312,7 +336,7 @@ def hf_filtering(tune: Tune, idn: Identification, loop_hz: float) -> tuple[float
     return float(np.sqrt(np.mean(np.abs(C.Fg) ** 2))), float(np.sqrt(np.mean(np.abs(C.Fg * C.Fd) ** 2)))
 
 
-def score_tune(fl, idn, nm, tune, goals, noise_ref, axes=(0, 1, 2), maxiter=40, seed=0, hf_ref=None):
+def score_tune(fl, idn, nm, tune, goals, noise_ref, axes=(0, 1, 2), maxiter=40, seed=0, hf_ref=None, anchor=None):
     results = {}
     total = 0.0
     if hf_ref is not None:
@@ -323,6 +347,8 @@ def score_tune(fl, idn, nm, tune, goals, noise_ref, axes=(0, 1, 2), maxiter=40, 
     for axis in axes:
         cases = build_cases(fl, idn, tune, axis, goals)
         prob = AxisProblem(tune, axis, cases, idn, fl.loop_hz, nm, goals, noise_ref.get(axis) if noise_ref else None)
+        if anchor is not None:
+            prob.anchor = (anchor.i(f"p_{AXES[axis]}"), anchor.i(f"d_{AXES[axis]}"))
         r = optimize_axis(prob, tune, maxiter=maxiter, seed=seed)
         results[axis] = r
         total += r.objective * (0.5 if axis == 2 else 1.0)
@@ -420,7 +446,7 @@ def candidate_moves(t: Tune) -> list[tuple[str, dict]]:
 def global_search(fl, idn, nm, tune0: Tune, goals: Goals, passes: int = 2, maxiter: int = 30,
                   log=print, fixed: dict | None = None, safe_tunes: list[Tune] | None = None,
                   noise_ref: dict | None = None, hf_ref: tuple[float, float] | None = None,
-                  verbose: bool = False) -> SearchResult:
+                  verbose: bool = False, anchor: Tune | None = None) -> SearchResult:
     if noise_ref is None and nm is not None:
         noise_ref = reference_noise(nm, [tune0] + list(safe_tunes or []), fl.loop_hz, idn)
     if hf_ref is None:
@@ -429,7 +455,8 @@ def global_search(fl, idn, nm, tune0: Tune, goals: Goals, passes: int = 2, maxit
     tune = tune0.copy()
     if fixed:
         tune.update(**fixed)
-    best_score, best_axes = score_tune(fl, idn, nm, tune, goals, noise_ref, maxiter=maxiter, hf_ref=hf_ref)
+    anchor = anchor or tune0
+    best_score, best_axes = score_tune(fl, idn, nm, tune, goals, noise_ref, maxiter=maxiter, hf_ref=hf_ref, anchor=anchor)
     for r in best_axes.values():
         apply_axis(tune, r)
     history = [("start", best_score)]
@@ -440,7 +467,7 @@ def global_search(fl, idn, nm, tune0: Tune, goals: Goals, passes: int = 2, maxit
             cand = tune.copy().update(**mv)
             if all(str(cand.values.get(k)) == str(tune.values.get(k)) for k in mv):
                 continue  # no-op move
-            sc, axes = score_tune(fl, idn, nm, cand, goals, noise_ref, maxiter=maxiter, hf_ref=hf_ref)
+            sc, axes = score_tune(fl, idn, nm, cand, goals, noise_ref, maxiter=maxiter, hf_ref=hf_ref, anchor=anchor)
             feas = all(a.feasible for a in axes.values())
             tag = "" if feas else " (constraints violated)"
             # the score already contains constraint penalties, so infeasible candidates can
@@ -481,7 +508,7 @@ def multi_start_search(fl, idn, nm, tune0: Tune, goals: Goals, seeds: dict[str, 
         log(f"=== seed: {name}")
         start = tune0.copy().update(**seed)
         r = global_search(fl, idn, nm, start, goals, passes=passes, maxiter=maxiter, log=log, noise_ref=noise_ref,
-                          hf_ref=hf_ref)
+                          hf_ref=hf_ref, anchor=tune0)
         results[name] = r
         log(f"=== seed {name}: final score {r.score:.3f}")
         if best is None or r.score < best.score:

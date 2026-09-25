@@ -62,7 +62,7 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
     L.append("")
     L.append("## Current vs new (model predictions)")
     L.append("")
-    L.append("| axis | tune | hover crossover | hover PM | hover GM | hover Ms | idle crossover | full-throttle PM | worst PM (all cases) | worst Ms | noise / budget |")
+    L.append("| axis | tune | hover crossover | hover PM | hover GM | hover Ms | idle crossover | full-throttle PM | worst PM (all cases) | worst Ms | noise vs proven-safe |")
     L.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for name, per in result["evaluation"].items():
         for ax, e in per.items():

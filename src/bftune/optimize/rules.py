@@ -46,7 +46,7 @@ def tune_feedforward(fl: Flight, idn: Identification, tune: Tune, style: str = "
     alone produces the requested angular acceleration on an integrator plant with gain K.
     """
     rx = rx_rate_hz(fl)
-    target = overshoot_max if overshoot_max is not None else {"race": 12.0, "freestyle": 7.0, "cinematic": 3.0}.get(style, 7.0)
+    target = overshoot_max if overshoot_max is not None else {"race": 12.0, "freestyle": 10.0, "cinematic": 3.0}.get(style, 10.0)
     out = []
     for axis, ai in idn.axes.items():
         ax = AXES[axis]

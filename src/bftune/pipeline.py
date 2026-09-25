@@ -102,6 +102,9 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     log("building alias-aware noise model ...")
     nm = build_noise(fl, tune, idn.time_scale)
     warns = sanity_warnings(fl, idn)
+    bad = [b.throttle for b in nm.bands if np.max(b.calib_err) > 1.0]
+    if bad:
+        warns.append(f"noise-model fit error > 1 in throttle bands {', '.join(f'{t:.2f}' for t in bad)}: noise predictions there are less certain")
     if not nm.bands:
         warns.append("noise model empty: fly >=20 s of steady flight outside the chirps (hover/cruise) so motor noise can be checked")
     an = Analysis(str(Path(log_path).resolve()), str(Path(dump_path).resolve()) if dump_path else None, log_index, tune, idn, nm,
@@ -185,7 +188,7 @@ def archetype_seed(an: Analysis) -> dict:
 
 
 def optimize(out: Path, style: str = "freestyle", safe_logs: list[str] | None = None, safe_cli: list[str] | None = None,
-             passes: int = 2, maxiter: int = 25, noise_budget: float = 1.0, log=print, seeds: dict | None = None) -> dict:
+             passes: int = 2, maxiter: int = 25, noise_budget: float = 0.9, log=print, seeds: dict | None = None) -> dict:
     from .optimize import rules
     from .optimize.search import FILTER_KEYS, Goals, multi_start_search
 
@@ -337,8 +340,8 @@ def finalize(out, an, fl, old, new, best, allr, goals, safe, decisions, style, l
     for ax, e in ev["new"].items():
         h = e["hover"]
         log(f"  {ax:5s} hover fc {h['fc'] or float('nan'):5.1f} Hz  PM {h['pm'] or float('nan'):4.0f}°  Ms {h['ms'] or float('nan'):.2f}"
-            f" | worst PM {e['worst']['pm']:4.0f}°  worst Ms {e['worst']['ms']:.2f} | noise/budget "
-            + (f"{e['noise_vs_budget']:.2f}" if an.nm.bands else "n/a"))
+            f" | worst PM {e['worst']['pm']:4.0f}°  worst Ms {e['worst']['ms']:.2f} | noise "
+            + (f"{e['noise_vs_budget']:.2f} of proven-safe level" if an.nm.bands else "n/a"))
         for v in e["violations"]:
             log(f"      violated: {v}")
     if not an.nm.bands:
@@ -348,3 +351,17 @@ def finalize(out, an, fl, old, new, best, allr, goals, safe, decisions, style, l
     if problems:
         log("VALIDATION PROBLEMS: " + "; ".join(problems))
     return result
+
+
+def print_evaluation(ev: dict, noise_model: bool, log=print) -> None:
+    """Compact verdict table for `bftune evaluate` / optimize."""
+    for name, per in ev.items():
+        v = "PASS" if not any(e["violations"] for e in per.values()) else "FAIL"
+        log(f"{name}: {v}")
+        for ax, e in per.items():
+            h, i, w = e["hover"], e["idle"], e["worst"]
+            nb = f"{e['noise_vs_budget']:.2f}x safe" if noise_model else "n/a"
+            log(f"  {ax:5s} hover fc {h['fc'] or float('nan'):5.1f} Hz PM {h['pm'] or float('nan'):4.0f}° Ms {h['ms'] or float('nan'):.2f}"
+                f" | idle fc {i['fc'] or float('nan'):5.1f} Hz | worst PM {w['pm']:4.0f}° Ms {w['ms']:.2f} | noise {nb}")
+            for x in e["violations"]:
+                log(f"        violated: {x}")

@@ -74,7 +74,7 @@ class Identification:
         if self.motor:
             lines.append(
                 f"motor: tau(hz) = 1/({self.motor.c0:.2f} + {self.motor.c1:.4f}*hz); "
-                f"authority full/hover ≈ {self.motor.authority_ratio(self.motor.bins_hz[-1], self.motor.bins_hz[len(self.motor.bins_hz)//2]):.2f}"
+                f"authority full/hover ≈ {self.motor.authority_ratio(self.motor.bins_hz[-1], float(np.median(self.motor.bins_hz))):.2f}"
             )
         lines += [f"note: {n}" for n in self.notes]
         return "\n".join(lines)

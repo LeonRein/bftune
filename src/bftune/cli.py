@@ -77,9 +77,15 @@ def cmd_evaluate(a) -> int:
     for p in a.cli:
         tunes[Path(p).stem] = tune_from_cli_text(an.tune, Path(p).read_text())
     safe = [safe_tune_from_log(p) for p in (a.safe_log or [])]
-    goals = Goals.for_style(a.style)
+    goals = Goals.for_style(a.style, noise_budget=a.noise_budget)
     ref = reference_noise(an.nm, [an.tune] + safe, fl.loop_hz, an.idn) if an.nm.bands else None
-    print(json.dumps(evaluate_tunes(an, fl, tunes, goals, ref), indent=1, default=float))
+    ev = evaluate_tunes(an, fl, tunes, goals, ref)
+    if a.json:
+        print(json.dumps(ev, indent=1, default=float))
+    else:
+        from .pipeline import print_evaluation
+
+        print_evaluation(ev, bool(an.nm.bands), log=_log)
     return 0
 
 
@@ -132,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("cli", nargs="+", help="text files with 'set x = y' lines (applied on top of the logged tune)")
     s.add_argument("--safe-log", action="append", help="log of another tune that flew with cool motors (noise budget)")
     s.add_argument("--style", default="freestyle", choices=["freestyle", "race", "cinematic"])
+    s.add_argument("--noise-budget", type=float, default=0.9, help="multiplier on the proven-safe motor-noise level")
+    s.add_argument("--json", action="store_true", help="full JSON output")
     s.set_defaults(fn=cmd_evaluate)
 
     s = sub.add_parser("synth", help="generate a synthetic chirp flight (testing)")
@@ -152,7 +160,8 @@ def _opt_args(s) -> None:
     s.add_argument("--safe-log", action="append",
                    help="blackbox log of another tune of the same quad that flew with cool motors (raises the noise budget to its level)")
     s.add_argument("--safe-cli", action="append", help="CLI diff of another proven-safe tune")
-    s.add_argument("--noise-budget", type=float, default=1.0, help="multiplier on the proven-safe motor-noise level")
+    s.add_argument("--noise-budget", type=float, default=0.9,
+                   help="multiplier on the proven-safe motor-noise level (default 0.9 = 10%% margin)")
     s.add_argument("--passes", type=int, default=2, help="coordinate-descent passes per seed (more = slower, finer)")
     s.add_argument("--maxiter", type=int, default=25, help="differential-evolution generations per axis evaluation")
 

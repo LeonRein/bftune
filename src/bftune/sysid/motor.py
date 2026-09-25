@@ -38,11 +38,14 @@ class MotorModel:
         return np.clip(np.asarray(hz, dtype=float), self.bins_hz.min(), self.bins_hz.max())
 
     def tau_at(self, hz: float | np.ndarray) -> np.ndarray:
-        return 1.0 / (self.c0 + self.c1 * self._clamp(hz))
+        """Piecewise-linear in 1/tau between the measured speed bins (flat outside them).
+
+        The global fit 1/tau = c0 + c1*hz is kept for reporting, but the bins are used directly:
+        at low rpm the lag grows faster than the linear fit suggests (idle/propwash matter)."""
+        return 1.0 / np.interp(self._clamp(hz), self.bins_hz, 1.0 / self.tau)
 
     def gain_at(self, hz: float | np.ndarray) -> np.ndarray:
-        g = self.g0 + self.g1 * self._clamp(hz)
-        return np.maximum(g, 0.2 * float(np.min(self.gain)))
+        return np.interp(self._clamp(hz), self.bins_hz, self.gain)
 
     def authority_ratio(self, hz: float, ref_hz: float) -> float:
         """Relative torque authority d(thrust)/d(cmd) ∝ omega * domega/dcmd (thrust ∝ omega²)."""
