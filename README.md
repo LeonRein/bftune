@@ -80,6 +80,8 @@ is enough; faster is better. See [skills/bf-flight-protocol/SKILL.md](skills/bf-
   checks cover that.
 - Tested on real logs of a 3.5" 4S quad (two independent tunes, cross-validated) and on synthetic
   twins of a 65 mm whoop, 3.5", 5" and 10".
+- Validated by cold tests: fresh agents with only this repository tuned the reference quad and audited
+  the firmware port. Their findings are fixed in 0.1.x/0.2.0.
 
 ## Development
 ```bash

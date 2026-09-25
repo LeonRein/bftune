@@ -1,6 +1,6 @@
 {
   "name": "bftune",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Model-based Betaflight tuning: turn a blackbox chirp log + CLI dump into an optimal, validated PID/filter tune (tinywhoop to 10\").",
   "author": { "name": "LeonRein" },
   "license": "GPL-3.0-or-later",
