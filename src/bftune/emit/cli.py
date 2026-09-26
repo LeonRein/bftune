@@ -52,10 +52,11 @@ def cli_block(
     problems = validate(tmp, all_keys, version)
     problems += [f"revert: {p}" for p in validate(old, [k for k in all_keys if k in old.values], version)]
 
-    def block(values: Tune, header: list[str]) -> str:
-        master = [k for k in all_keys if db.get(k, {}).get("scope") == "master"]
-        prof = [k for k in all_keys if db.get(k, {}).get("scope") == "profile"]
-        rate = [k for k in all_keys if db.get(k, {}).get("scope") == "rateprofile"]
+    def block(values: Tune, header: list[str], skip: tuple = ()) -> str:
+        keys_ = [k for k in all_keys if k not in skip]
+        master = [k for k in keys_ if db.get(k, {}).get("scope") == "master"]
+        prof = [k for k in keys_ if db.get(k, {}).get("scope") == "profile"]
+        rate = [k for k in keys_ if db.get(k, {}).get("scope") == "rateprofile"]
         lines = list(header)
         for k in master:
             lines.append(f"set {k} = {values.values.get(k, old.values.get(k, ''))}")
@@ -63,7 +64,8 @@ def cli_block(
             if profile is not None:
                 lines.append(f"profile {profile}")
             else:
-                lines.append("# PID profile settings: select the profile you fly FIRST (profile index unknown without a dump)")
+                lines.append("# >>> PID profile settings below. No dump was given, so the profile index is unknown:")
+                lines.append("# >>> type `profile N` (N = the PID profile you fly, 0-3) before pasting the following lines.")
             for k in prof:
                 lines.append(f"set {k} = {values.values.get(k, old.values.get(k, ''))}")
         if rate:
@@ -80,9 +82,17 @@ def cli_block(
         "# Paste into the Betaflight CLI. 'save' reboots the flight controller.",
     ]
     head += [f"# {c}" for c in (extra_comment or [])]
+    if profile is None:
+        head.append("# NOTE: no CLI dump was given. Back up first with `diff all`; that backup is the exact way back.")
     apply_txt = block(tmp, head)
     old_full = old.copy()
-    revert_txt = block(old_full, [f"# bftune revert block - restores the values before {stamp}"])
+    rhead = [f"# bftune revert block - restores the values before {stamp}"]
+    skip: tuple = ()
+    if profile is None:  # no dump: the old slider state is unknown, so don't guess it
+        skip = tuple(guard)
+        rhead.append("# No dump was given: the simplified_* slider state before the tune is unknown and not restored here.")
+        rhead.append("# The exact way back is your `diff all` backup.")
+    revert_txt = block(old_full, rhead, skip)
     return apply_txt, revert_txt, problems
 
 

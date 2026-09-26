@@ -14,11 +14,16 @@ aliasing. That spectrum predicts the noise *at the motors* (P+D path × thrust_l
 candidate.
 
 **Budget:** per throttle band and axis, a candidate's predicted motor noise must stay ≤ 0.9 × the
-level of a **proven-safe** tune:
+level of a **proven-safe** tune. It may also stay at or below the flown tune's own level: that
+level has flown, so no forced cut. The 0.9 margin guards against model error when you go *above* what
+flew, towards a safe-log reference. References:
 - by default, the logged tune (ask how warm the motors were);
 - `--safe-log` / `--safe-cli`: other tunes of the same quad that flew with cool motors. This raises
   the reference, and it is the most valuable extra input.
-- If the motors were **hot** with the logged tune, use `--noise-budget 0.7-0.8`, then back off.
+  - "Cool or slightly warm" qualifies. "Warm" qualifies only with `--noise-budget 0.8-0.85`.
+  - A safe log needs no dump: the blackbox header contains its full tune.
+- If the motors were **warm**, use `--noise-budget 0.85`; if **hot**, 0.7-0.8. A budget below 0.9
+  disables the flown-tune allowance, so the candidate must really cut noise.
 - Raise the budget above 0.9 only with evidence.
 
 `bftune noise -o A [cand.txt]` shows, per throttle band: the measured D-term and gyro RMS, the fit

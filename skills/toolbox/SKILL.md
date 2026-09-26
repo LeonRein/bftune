@@ -16,11 +16,11 @@ commands print human-readable text; most accept `--json`. Paths below:
 | command | time | what it gives you |
 |---|---|---|
 | `bftune project init P --name NAME` | instant | `quad.md`, `history.md`, `logs/`, `analysis/`, `tunes/`; never overwrites |
-| `bftune project next-tune-dir P` | instant | prints `P/tunes/NN-date` for the next iteration |
+| `bftune project next-tune-dir P` | instant | creates and prints `P/tunes/NN-date` for the next iteration |
 | `bftune inspect LOG [--dump D]` | 2-10 s | sessions, duration, log rate, debug mode, chirp runs per axis (reconstructed or not), warnings |
 | `bftune diagnose LOG [LOG2 ...] [--dump D] [-v] [--json]` | 3-10 s/log | findings (id, severity, evidence, causes, knobs); works without chirps; compare several logs of one quad |
 | `bftune errspec LOG [LOG2 ...]` | 3-10 s/log | free-flight tracking-error spectrum per band and axis; a 30-60 Hz bump is the sensitivity peak |
-| `bftune analyze LOG --dump D -o A [--index N] [--safe-log X]... [--safe-cli Y]...` | 10-60 s | identification (chirp, or a freestyle fallback), validation, noise model, diagnosis → `A/analysis.json`, `A/analysis.pkl`, `plant_bode.png`, `motor_model.png` |
+| `bftune analyze LOG [--dump D] -o A [--index N] [--safe-log X]... [--safe-cli Y]...` | 10-60 s | identification (chirp, or a freestyle fallback), validation, noise model, diagnosis → `A/analysis.json`, `A/analysis.pkl`, `plant_bode.png`, `motor_model.png` |
 | `bftune safe -o A [--log X] [--cli Y]` | 5 s | lists or adds proven-safe tunes (noise references) to an analysis |
 | `bftune brief -o A [--style S]` | 5-15 s | **the situation report** (JSON, also `A/brief.json`): identification source, uncertainty and plant per axis; flight facts; current tune; its assessment; proven-safe tunes with their diffs and assessments; noise bands and persistent peaks; findings; warnings |
 
@@ -31,8 +31,8 @@ Global flags: `--style freestyle|race|cinematic` and `--noise-budget 0.9`.
 |---|---|
 | `bftune candidate -o A cand.txt [--base other.txt]` | writes an editable file with the logged tune (grouped `set` lines) |
 | `bftune assess -o A f1.txt [f2.txt ...] [--with-current] [--with-safe] [--fast] [--json]` | verdict (PASS/FAIL, `gate` absolute or relative), per axis hover/idle/full crossover, PM, GM, Ms (+ frequency), worst case and label, noise vs safe, stick-flick lag and overshoot, violations, notes |
-| `bftune sweep -o A cand.txt KEY VALUES` | one row per value: verdict, crossover, PM, Ms, noise, objective. VALUES are `20:50:5` or `a,b,c`; lists like `100,100,0;100,50,0` for array settings |
-| `bftune suggest -o A f1.txt [f2.txt ...] [--axis roll]` | P/I/D/d_max proposal per axis with everything else fixed; with several files, the verdict and objective of each at its best gains (to compare filter layouts) |
+| `bftune sweep -o A cand.txt KEY VALUES` | one row per value and axis: axis verdict, hover crossover/PM/Ms, full PM, worst PM/Ms, noise, objective, first violation. VALUES are `20:50:5` or `a,b,c`; lists like `100,100,0;100,50,0` for array settings |
+| `bftune suggest -o A f1.txt [f2.txt ...] [--axis roll]` | P/I/D/d_max proposal per axis with everything else fixed (limited to ±15 % of the flown gains when there is no chirp; `feasible: false` = nothing meets every limit, the least-violating point is shown); with several files, the verdict and objective of each at its best gains (to compare filter layouts) |
 | `bftune ff -o A cand.txt --axis roll --values 60:180:10` | FF value → stick lag, flick and snap overshoot, settle time |
 | `bftune noise -o A [cand.txt]` | per throttle band: measured D and gyro noise, fit error, non-RPM peaks (persistent?), safe level, candidate |
 | `bftune emit -o A cand.txt [--to DIR]` | deliverables (`tune_cli.txt`, `revert_cli.txt`, `report.md/html`, `tune.json`, plots); **exit 2 = FAIL** |

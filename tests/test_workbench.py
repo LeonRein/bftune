@@ -16,6 +16,12 @@ def test_parse_candidate_keeps_reasons():
     assert why == {"d_roll": "noise limited"}
 
 
+def test_off_shortcut_carries_reason():
+    base = Tune.from_config(Config())
+    t, why = parse_candidate(base, "set dterm_lpf1_type = OFF  # replaced by one PT3\n")
+    assert t.i("dterm_lpf1_static_hz") == 0 and why["dterm_lpf1_static_hz"] == "replaced by one PT3"
+
+
 def test_parse_values():
     assert parse_values("20:30:5") == [20, 25, 30]
     assert parse_values("PT1,PT3") == ["PT1", "PT3"]

@@ -49,9 +49,17 @@ def cmd_inspect(a) -> int:
 
     if a.log.endswith(".pkl"):
         fl = load_flight(a.log)
-        print(f"{a.log}: synthetic flight, {fl.n} frames, {fl.t[-1]:.1f} s, rate {fl.fs:.0f} Hz, loop {fl.loop_hz:.0f} Hz")
-        for r in find_chirps(fl):
+        print(f"{a.log}: synthetic flight (1 session), {fl.n} frames, {fl.t[-1]:.1f} s, rate {fl.fs:.0f} Hz "
+              f"(loop {fl.loop_hz:.0f} Hz / {fl.log_ratio}), firmware {fl.cfg.firmware_version}")
+        if fl.motor_hz is not None:
+            print(f"    debug_mode {fl.debug_mode}, motor Hz {np.percentile(fl.motor_hz, 5):.0f}–{np.percentile(fl.motor_hz, 99):.0f}")
+        runs = find_chirps(fl)
+        for r in runs:
             print(f"    chirp {AXES[r.axis]:5s} t={fl.t[r.start]:6.1f}s {r.f_start:.1f}->{r.f_end:.0f} Hz thr {r.throttle:.2f}")
+        if not runs:
+            print("    no chirp runs (freestyle only)")
+        for w in sanity_warnings(fl, None):
+            print("    warning:", w)
         return 0
     logs = decode(a.log)
     print(f"{a.log}: {len(logs)} log session(s)")
@@ -157,7 +165,8 @@ def cmd_suggest(a) -> int:
         for ax, r in res.items():
             print(f"{ax:5s}: P {r['p']} I {r['i']} D {r['d']} d_max {r['d_max']}  feasible={r['feasible']} "
                   f"noise {r['noise_vs_safe']:.2f}x safe  worst PM {r['worst']['pm']:.0f}° Ms {r['worst']['ms']:.2f}"
-                  f"  obj {ass['axes'][ax]['objective_db']:.2f} dB")
+                  f"  obj {ass['axes'][ax]['objective_db']:.2f} dB"
+                  + (f"  [{r['note']}: {r['violated']}]" if "note" in r else "") + (f"  [{r['range']}]" if "range" in r else ""))
     print("(proposals with all other settings fixed; several files = compare filter/TPA variants at their best gains)")
     return 0
 
@@ -181,8 +190,9 @@ def cmd_brief(a) -> int:
     from .workbench import brief
 
     b = brief(_wb(a))
-    Path(a.out, "brief.json").write_text(json.dumps(b, indent=1, default=float))
-    print(json.dumps(b, indent=1, default=float))
+    txt = json.dumps(b, indent=1, default=float, ensure_ascii=False)
+    Path(a.out, "brief.json").write_text(txt)
+    print(txt)
     return 0
 
 
@@ -193,7 +203,9 @@ def cmd_project(a) -> int:
         made = init_project(Path(a.path), a.name)
         print(f"project at {Path(a.path).resolve()}: " + (", ".join(p.name for p in made) + " created" if made else "exists"))
     else:
-        print(next_tune_dir(Path(a.path)))
+        d = next_tune_dir(Path(a.path))
+        d.mkdir(parents=True, exist_ok=True)
+        print(d)
     return 0
 
 

@@ -50,6 +50,10 @@ user-invocable: false
   together with `iterm_relax`.
 
 ## D-max
+The `/dmax` cases are evaluated at `d_max` whenever `d_max > d`. In 2026.6 D rises toward `d_max`
+through the gyro-driven boost (`d_max_gain`) *and* the setpoint-driven advance
+(`d_max_advance`), so `d_max_gain = 0` alone does not keep D at base. Only `d_max = d` does.
+
 Sweep `d_max_<axis>` from D to 1.4 × D; the `/dmax` cases must pass. D-max pays off when base D is
 noise-limited well below the damping optimum. If P/D already sit at the Ms limit, extra D raises the
 sensitivity peak (the crossover moves into the delay region). Then keep d_max = D.
@@ -60,17 +64,28 @@ sensitivity peak (the crossover moves into the delay region). Then keep d_max = 
   needs cutting there. Keep the breakpoint above hover.
 - **`thrust_linear`:** raises low-throttle authority (propwash) and lowers high-throttle gain. It
   also raises motor noise at low throttle, so check `noise`. Sweep 0 / 20 / 40.
-- **`dyn_idle_min_rpm`** (in hundreds of rpm): about 90-110 % of `flight.natural_idle_rpm_p20`.
-  Higher gives more authority at zero throttle but more idle thrust (floaty descents). It needs
-  RPM telemetry.
+- **`dyn_idle_min_rpm`** (in hundreds of rpm): about 100-115 % of `flight.natural_idle_rpm_p20`.
+  - It holds the motors up when rpm would sag below that floor: in dives, after chops, with prop
+    wash unloading. The model's idle case uses max(natural idle, floor), so settings below natural
+    idle show no effect there. The real benefit is in the low tail of dives, which the model
+    underestimates.
+  - Higher gives more authority at zero throttle, but more idle thrust (floaty descents).
+  - It needs RPM telemetry.
 
 ## Feedforward
 `bftune ff -o A cand.txt --axis roll --values 60:180:10`. Pick the lowest stick lag with flick
 overshoot ≤ 10 % and snap overshoot ≤ 15 % (race 12/20 %, cinematic 3/8 %). On yaw,
 `feedforward_yaw_hold_*` also acts.
 
+**Mixed styles** (e.g. "freestyle and some racing"): keep the freestyle margin limits (propwash
+matters in both) and use the race limits only for FF overshoot and RC smoothing, where delay is
+what the pilot feels. Say so.
+
+`rc_smoothing_auto_factor` (35 freestyle, 25 race, 60 cinematic) is part of the step simulation.
+Compare values with `sweep … rc_smoothing_auto_factor 25,35,50 --steps`. Lower means less lag but
+more RC jitter, which the model can't see.
+
 ## Judgement settings (not modelled; change only with a reason)
-- `rc_smoothing_auto_factor`: 35 freestyle, 25 race, 60 cinematic (latency vs RC jitter).
 - `iterm_relax_cutoff`: 15 freestyle, 20 race, 10 cinematic. Lower it against bounce-back.
 - `anti_gravity_gain`, FF jitter/smoothing/averaging: defaults unless the log shows a problem.
 - Always turn `simplified_pids_mode`, `simplified_dterm_filter` and `simplified_gyro_filter` OFF

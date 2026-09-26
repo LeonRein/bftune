@@ -23,8 +23,10 @@ def test_header_enums_are_cli_names():
 def test_no_profile_switch_without_dump():
     old = Tune.from_config(config_from_headers(_log({})))
     new = old.copy().update(p_roll=50)
-    txt, _, _ = cli_block(old, new, profile=None)
-    assert "\nprofile " not in txt and "select the profile" in txt
+    txt, rev, _ = cli_block(old, new, profile=None)
+    assert "\nprofile " not in txt and "type `profile N`" in txt
+    # the old slider state is unknown without a dump: the revert must not guess it
+    assert "set simplified_" not in rev and "diff all" in rev
 
 
 def test_yaw_hold_feedforward_adds_setpoint_term():

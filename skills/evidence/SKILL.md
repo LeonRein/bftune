@@ -19,10 +19,14 @@ There are three sources. Each is wrong in its own way:
    - `chirp`: precise. Gain within about ±10 %; the gate is absolute (design margins).
    - `freestyle`: gain within about ±40 %, delay from priors. The gate is **relative**: no worse
      than the flown tune. Make only small, diagnosis-driven changes and plan a chirp flight.
-2. `chain_check_passed` on every axis. It shows the firmware model matches this firmware and
+2. `chain_check_passed` on every axis (`null` = could not be checked, as in freestyle mode with
+   too narrow a stick band; that is not a failure, but it is also no confirmation). It shows the firmware model matches this firmware and
    config. If it fails, stop.
-3. `validation.closed_loop` < 1 dB / 8° rms, and `validation.replay` roll/pitch fit > 60 % (yaw is
-   lower).
+3. `validation.closed_loop` < 1 dB / 8° rms (chirp only), and `validation.replay` roll/pitch fit
+   > 60 % (yaw is lower).
+   - A replay fit of 50-60 % is a caution: note it and keep more margin.
+   - Below 50 %, or a closed-loop error above 2 dB, means stop and look for the cause: saturation,
+     wrong session, or angle mode.
 4. Parameters within the craft class (`bftune:craft-classes`).
 5. `coherent_to_hz`: the band where the plant was measured. If the crossover or the Ms peak lies
    beyond it, `assess` says so, and those numbers rely on the model's extrapolation. Be more

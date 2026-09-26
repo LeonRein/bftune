@@ -293,7 +293,9 @@ def optimize_axis(prob: AxisProblem, tune: Tune, seed: int = 0, maxiter: int = 5
 
     bounds = [bP, bD, bR]
     init = np.clip([P0, D0, max(1.0, dm0 / D0) if D0 > 0 else 1.0], [b[0] for b in bounds], [b[1] for b in bounds])
-    init = np.minimum(np.maximum(init, [b[0] for b in bounds]), [b[1] - 1e-9 for b in bounds])
+    # keep x0 strictly inside: scipy rescales x0 to [0, 1] and rejects float round-off at the edges
+    eps = [max((b[1] - b[0]) * 1e-6, 1e-12) for b in bounds]
+    init = np.minimum(np.maximum(init, [b[0] + e for b, e in zip(bounds, eps)]), [b[1] - e for b, e in zip(bounds, eps)])
     res = differential_evolution(fun, bounds, seed=seed, maxiter=maxiter, popsize=12, tol=1e-6, polish=True,
                                  x0=init, updating="deferred")
     P, D, R = res.x

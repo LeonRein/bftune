@@ -18,6 +18,12 @@
 - `emit --to DIR` writes the deliverables into the tune folder. The plugin ships `bin/bftune` (runs the bundled package via uv).
 - `bftune synth`: `--no-chirp`, `--set KEY=VALUE`, `--frame-mode-hz`, `--repeats`, `--freestyle-s` (eval fixtures).
 - Plugin evals (`evals/`) on synthetic twins: 5" with chirps, 3.5" without chirp, 10" long range.
+- From cold-agent tests: the flown tune's own noise level always passes (the 0.9 margin applies above it;
+  `--noise-budget` < 0.9 still forces a cut); no-dump deliveries no longer guess the slider state in the revert block
+  and ask for the profile explicitly; report text is honest about the relative gate; `sweep` shows per-axis verdicts,
+  full-throttle PM, Ms@Hz and the first violation; `suggest` is limited to ±15 % without a chirp and names the
+  violated limit; `diagnose` reports the direction of a motor imbalance (CG/trim); logs are checked for time gaps;
+  `brief` starts with a readable summary; reasons carry through the `*_type = OFF` shortcut.
 - README rewritten for pilots; the CLI reference moved to `docs/DEVELOPMENT.md`; new `docs/python-api.md`.
 
 ## 0.2.0

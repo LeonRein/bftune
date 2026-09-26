@@ -71,9 +71,17 @@ def sanity_warnings(fl: Flight, idn: Identification | None) -> list[str]:
         w.append(f"log rate {fl.fs:.0f} Hz: noise above {fl.fs/2:.0f} Hz is aliased (handled by the alias-aware noise model)")
     if fl.motor_hz is None:
         w.append("no eRPM in log (bidirectional DShot off?): RPM filter and motor model unavailable")
-    sat = np.mean(np.any(fl.motor_raw >= 2046, axis=1)) if fl.motor_raw.size else 0
-    if sat > 0.02:
-        w.append(f"motors at 100% for {100*sat:.1f}% of the log (saturation): check props/weight/motor_output_limit")
+    dt = np.diff(fl.t)
+    if dt.size:
+        gaps = dt > 2.5 * np.median(dt)
+        if gaps.sum() > 0:
+            w.append(f"{int(gaps.sum())} time gap(s) in the log (missing frames, {float(dt[gaps].sum()):.2f} s in total): "
+                     "the logging device may not keep up with this rate; spectra near gaps are less reliable")
+    hi = np.any(fl.motor_raw >= 2046, axis=1) if fl.motor_raw.size else np.zeros(fl.n, bool)
+    part = float(np.mean(hi & (fl.throttle < 0.75)))
+    if part > 0.01:  # at full throttle (punch-outs) saturation is normal
+        w.append(f"a motor is at 100% for {100*part:.1f}% of the log below 75% throttle (authority limit): "
+                 "check props/weight, P/D/FF, motor_output_limit")
     if idn is not None:
         chirp = getattr(idn, "source", "chirp") == "chirp"
         for a, ai in idn.axes.items():
@@ -98,12 +106,13 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     fl = load_flight(log_path, dump_path, log_index)
     tune = Tune.from_config(fl.cfg)
     log(f"{fl.n} frames, {fl.t[-1]:.0f} s, log rate {fl.fs:.0f} Hz, loop {fl.loop_hz:.0f} Hz, firmware {fl.cfg.firmware_version}")
-    log("identifying plant from chirp runs ...")
+    log("identifying plant ...")
     idn = identify(fl, tune)
     log(idn.summary())
     log("validating model ...")
     cl = closed_loop_check(fl, tune, idn)
-    val = {"closed_loop": {AXES[a]: {"rms_db": c.rms_db, "rms_deg": c.rms_deg} for a, c in cl.items()}, "replay": {}}
+    val = {"closed_loop": {AXES[a]: {"rms_db": c.rms_db, "rms_deg": c.rms_deg} for a, c in cl.items()}
+           or "n/a (no chirp)", "replay": {}}
     for a in idn.axes:
         rr = replay(fl, tune, idn, a)
         if rr is not None:

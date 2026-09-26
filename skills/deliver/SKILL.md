@@ -18,6 +18,10 @@ user-invocable: false
      - the `simplified_*` = OFF guard (otherwise the Configurator's sliders overwrite explicit values);
      - master settings, then `profile N`, then `save`;
      - ranges validated against the firmware table (`tune.json.problems` must be empty).
+   - **No dump:** the profile index and slider state are unknown. `tune_cli.txt` then contains a
+     `profile` placeholder line that the pilot must edit. The revert block leaves out the
+     `simplified_*` lines, so the pilot's `diff all` backup is the real way back. Say both
+     explicitly.
 2. **Tell the pilot, in this order and briefly:**
    1. The CLI block to paste into the Configurator's CLI tab, ending with `save`. Tell them to back
       up first with `diff all`.

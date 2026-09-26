@@ -98,8 +98,21 @@ def saturation(fl: Flight) -> list[Finding]:
         med = np.median(fl.motor[hov], axis=0)
         spread = float((med.max() - med.min()) / max(med.mean(), 1e-6))
         if spread > 0.10:
-            out.append(Finding("motor_imbalance", "warn", f"motor outputs at hover differ by {100*spread:.0f} %",
-                               {"median_outputs": np.round(med, 3).tolist()},
+            ev = {"median_outputs": np.round(med, 3).tolist()}
+            where = ""
+            if len(med) == 4:  # Betaflight QUADX mixer order: 1 rear-right, 2 front-right, 3 rear-left, 4 front-left
+                cols = {"roll": np.array([-1, -1, 1, 1]), "pitch": np.array([1, -1, 1, -1]),
+                        "yaw": np.array([-1, 1, 1, -1])}
+                trim = {k: float(med @ c / 4) / max(float(med.mean()), 1e-6) for k, c in cols.items()}
+                ev["trim_pct"] = {k: round(100 * v, 1) for k, v in trim.items()}
+                desc = {"roll": ("left motors work harder: CG left of centre", "right motors work harder: CG right of centre"),
+                        "pitch": ("rear motors work harder: CG behind centre", "front motors work harder: CG ahead of centre"),
+                        "yaw": ("motors 2+3 work harder (a constant yaw correction: twisted motor, prop mismatch)",
+                                "motors 1+4 work harder (a constant yaw correction: twisted motor, prop mismatch)")}
+                k = max(trim, key=lambda q: abs(trim[q]))
+                where = f"; mostly {k}: {desc[k][0 if trim[k] > 0 else 1]} (assumes QUADX motor order)"
+            out.append(Finding("motor_imbalance", "warn" if spread < 0.3 else "problem",
+                               f"motor outputs at hover differ by {100*spread:.0f} %{where}", ev,
                                ["CG offset (battery position)", "bent/chipped prop", "weak motor or bearing"],
                                ["check props/motors; move battery; rerun after fixing (tuning cannot fix this)"]))
     return out

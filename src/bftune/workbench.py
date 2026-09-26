@@ -91,6 +91,9 @@ def parse_candidate(base: Tune, text: str) -> tuple[Tune, dict[str, str]]:
         apply_setting(t, k, v)
         if why:
             reasons[k] = why
+            if k in _LPF_OFF and v.upper() == "OFF":  # the shortcut changes the cutoffs: carry the reason
+                for kk in _LPF_OFF[k]:
+                    reasons[kk] = why
     return t, reasons
 
 
@@ -180,7 +183,13 @@ class Workbench:
         total, obj, pen, worst, nr, rows = prob.evaluate(tune.i(f"p_{ax}"), tune.i(f"i_{ax}"), d, dm, detail=True)
         byc = {r["case"]: r for r in rows}
         pick = lambda c, keys: {k: (None if byc.get(c, {}).get(k) is None else round(float(byc[c][k]), 2)) for k in keys}  # noqa: E731
-        viol = violations(rows, self.goals, nr if prob.noise_Q is not None and self.noise_ref else None)
+        has_noise = prob.noise_Q is not None and bool(self.noise_ref)
+        # the flown tune's own noise has flown: never force a cut below it (unless the budget was lowered
+        # explicitly below 0.9, i.e. hot motors). The 0.9 margin guards going *above* what flew.
+        noise_arg = nr if has_noise else None
+        if has_noise and self.goals.noise_budget >= 0.9 and nr <= self._logged_noise(axis) + 1e-3:
+            noise_arg = None
+        viol = violations(rows, self.goals, noise_arg)
         if self.relative_gate:
             viol = self._relative_violations(axis, rows, viol)
         res = {
@@ -198,6 +207,23 @@ class Workbench:
         if steps:
             res["step"] = self.step_metrics(tune, axis)
         return res
+
+    def _first_violation(self, base: Tune, axis: int, r) -> str:
+        ax = AXES[axis]
+        t = base.copy().set(f"p_{ax}", r.p).set(f"i_{ax}", r.i).set(f"d_{ax}", r.d).set(f"d_max_{ax}", r.d_max)
+        v = self.assess_axis(t, axis, steps=False)["violations"]
+        return (v[0] + (f" (+{len(v) - 1} more)" if len(v) > 1 else "")) if v else "none under the delivery gate"
+
+    def _logged_noise(self, axis: int) -> float:
+        cache = self.__dict__.setdefault("_logged_nr", {})
+        if axis not in cache:
+            t = self.logged
+            ax = AXES[axis]
+            d = t.i(f"d_{ax}")
+            prob = self.axis_problem(t, axis)
+            cache[axis] = float(prob.evaluate(t.i(f"p_{ax}"), t.i(f"i_{ax}"), d,
+                                              t.i(f"d_max_{ax}") / d if d > 0 else 1.0, detail=True)[4])
+        return cache[axis]
 
     @property
     def relative_gate(self) -> bool:
@@ -243,7 +269,14 @@ class Workbench:
         g, dchain = hf_filtering(tune, self.idn, self.src.loop_hz)
         notes = []
         if g > self.goals.hf_extrapolation * self.hf_ref[0] or dchain > self.goals.hf_extrapolation * self.hf_ref[1]:
-            notes.append("high-frequency filtering (1-3 kHz) is weaker than any proven tune: noise model extrapolates there")
+            which = []
+            if g > self.goals.hf_extrapolation * self.hf_ref[0]:
+                which.append(f"gyro path {g / self.hf_ref[0]:.2f}x")
+            if dchain > self.goals.hf_extrapolation * self.hf_ref[1]:
+                which.append(f"gyro+D-term path {dchain / self.hf_ref[1]:.2f}x")
+            notes.append("high-frequency filtering (1-3 kHz) is weaker than the least-filtered flown tune (logged + "
+                         f"proven-safe) on the {', '.join(which)} (limit {self.goals.hf_extrapolation:.2f}x): the noise "
+                         "model extrapolates there")
         for ax, e in per.items():
             fc = e["hover"]["fc"]
             msf = e["hover"].get("ms_hz")
@@ -276,12 +309,23 @@ class Workbench:
 
     def suggest(self, base: Tune, axes: list[int], maxiter: int = 30) -> dict:
         """Per-axis P/I/D/d_max helper with all other settings fixed (a proposal, not a decision)."""
+        from dataclasses import replace
+
         out = {}
         for a in axes:
             prob = self.axis_problem(base, a)
+            if self.relative_gate:  # no chirp: stay close to the flown gains (skills: about ±15 %)
+                prob.goals = replace(prob.goals, gain_range=(0.85, 1.15))
             r = optimize_axis(prob, base, maxiter=maxiter)
+            if self.relative_gate:  # feasibility = the gate the delivery uses (relative to the flown tune)
+                ax = AXES[a]
+                t = base.copy().set(f"p_{ax}", r.p).set(f"i_{ax}", r.i).set(f"d_{ax}", r.d).set(f"d_max_{ax}", r.d_max)
+                r.feasible = not self.assess_axis(t, a, steps=False)["violations"]
             out[AXES[a]] = {"p": r.p, "i": r.i, "d": r.d, "d_max": r.d_max, "feasible": r.feasible,
-                            "noise_vs_safe": round(float(r.noise_ratio), 3), "worst": {k: round(float(v), 2) for k, v in r.worst.items()}}
+                            "noise_vs_safe": round(float(r.noise_ratio), 3), "worst": {k: round(float(v), 2) for k, v in r.worst.items()},
+                            **({} if r.feasible else {"note": "no gains in range meet every limit; least-violating point",
+                                                      "violated": self._first_violation(base, a, r)}),
+                            **({"range": "±15 % of the flown P/D (no chirp)"} if self.relative_gate else {})}
         return out
 
     def ff_table(self, base: Tune, axis: int, values: list[int]) -> list[dict]:
@@ -393,7 +437,8 @@ class Workbench:
         log(format_assessment({"new": ass["new"]}))
         if missing:
             log("changes without a reason: " + ", ".join(missing))
-        log(f"wrote {dest/'tune_cli.txt'}, {dest/'revert_cli.txt'}, {dest/'report.md'}")
+        files = ["tune_cli.txt", "revert_cli.txt", "report.md", "report.html", "tune.json", *plots.values()]
+        log(f"wrote into {dest}: " + ", ".join(f for f in files if (dest / f).exists()))
         return result
 
 
@@ -411,7 +456,8 @@ def format_assessment(ass: dict) -> str:
             nz = "n/a" if e["noise_vs_safe"] is None else f"{e['noise_vs_safe']:.2f}x safe"
             lines.append(
                 f"  {ax:5s} hover fc {_f(h['fc'])} Hz PM {_f(h['pm'], '{:.0f}')}° Ms {_f(h['ms'], '{:.2f}')}"
-                f" | idle fc {_f(i['fc'])} Ms {_f(i['ms'], '{:.2f}')} | full PM {_f(fu['pm'], '{:.0f}')}°"
+                f"@{_f(h.get('ms_hz'), '{:.0f}')}Hz"
+                f" | idle fc {_f(i['fc'])} Ms {_f(i['ms'], '{:.2f}')}@{_f(i.get('ms_hz'), '{:.0f}')}Hz | full PM {_f(fu['pm'], '{:.0f}')}°"
                 f" | worst PM {w['pm']:.0f}° ({e.get('worst_case', {}).get('pm', '')}) Ms {w['ms']:.2f}"
                 f" ({e.get('worst_case', {}).get('ms', '')}) | noise {nz} | obj {e['objective_db']:.2f} dB")
             if "step" in e:
@@ -432,26 +478,30 @@ def format_assessment(ass: dict) -> str:
 
 
 def format_sweep(key: str, rows: list[dict]) -> str:
-    lines = [f"sweep {key}:"]
-    hdr = f"{'value':>8s} {'verdict':7s} " + " | ".join(
-        f"{ax}: fc/PM/Ms hover, idle fc, worstPM/Ms, noise, obj" for ax in rows[0] if ax in AXES)
-    lines.append(hdr)
+    """One line per value and axis: the axis's own verdict, the key margins and the first violation."""
+    lines = [f"sweep {key}   (overall = all assessed axes; axis = that axis alone)",
+             f"{'value':>8s} {'overall':7s} {'axis':5s} {'axis':4s}  hover fc/PM/Ms@Hz    idle fc  full PM  worst PM/Ms [case]"
+             f"          noise  obj     first violation"]
     for r in rows:
-        parts = []
+        first = True
         for ax in AXES:
             if ax not in r:
                 continue
             e = r[ax]
-            h, i, w = e["hover"], e["idle"], e["worst"]
+            h, i, fu, w = e["hover"], e["idle"], e["full"], e["worst"]
             nz = "n/a" if e["noise_vs_safe"] is None else f"{e['noise_vs_safe']:.2f}"
+            v = e.get("violations", [])
             st = ""
             if "step" in e:
-                st = (f" stick-lag {e['step']['flick']['stick_lag_ms']:.1f} ov {e['step']['flick']['overshoot_pct']:.0f}%"
+                st = (f" | stick-lag {e['step']['flick']['stick_lag_ms']:.1f} ov {e['step']['flick']['overshoot_pct']:.0f}%"
                       f"/{e['step']['snap']['overshoot_pct']:.0f}%")
             wc = e.get("worst_case", {}).get("pm", "")
-            parts.append(f"{_f(h['fc'])}/{_f(h['pm'], '{:.0f}')}/{_f(h['ms'], '{:.2f}')}, {_f(i['fc'])}, "
-                         f"{w['pm']:.0f}/{w['ms']:.2f} [{wc}], {nz}, {e['objective_db']:.2f}{st}")
-        lines.append(f"{str(r['value']):>8s} {r['verdict']:7s} " + " | ".join(parts))
+            lines.append(
+                f"{str(r['value']) if first else '':>8s} {r['verdict'] if first else '':7s} {ax:5s} {'ok' if not v else 'FAIL':4s}  "
+                f"{_f(h['fc']):>5s}/{_f(h['pm'], '{:.0f}'):>3s}/{_f(h['ms'], '{:.2f}')}@{_f(h.get('ms_hz'), '{:.0f}'):<3s}  {_f(i['fc']):>6s}  "
+                f"{_f(fu['pm'], '{:.0f}'):>6s}°  {w['pm']:4.0f}/{w['ms']:<5.2f} [{wc:18s}] {nz:>5s}  {e['objective_db']:6.2f}  "
+                f"{(v[0] + (f' (+{len(v) - 1})' if len(v) > 1 else '')) if v else '-'}{st}")
+            first = False
     return "\n".join(lines)
 
 
@@ -495,7 +545,7 @@ def brief(wb: Workbench) -> dict:
                            "params": {k: round(float(v), 5) for k, v in ai.plant.params.items()},
                            "fit_band_hz": [round(x, 1) for x in ai.fit_band],
                            "coherent_to_hz": round(ai.coherent_to_hz, 1),
-                           "chain_check_passed": bool(ai.chain.passed),
+                           "chain_check_passed": bool(ai.chain.passed) if np.isfinite(ai.chain.fg_rms_db) else None,
                            "op": {"throttle": round(ai.op.throttle, 3), "motor_hz": round(float(np.mean(ai.op.motor_hz)), 1),
                                   "vbat": round(ai.op.vbat, 2)}}
                  for a, ai in idn.axes.items()},
@@ -512,7 +562,19 @@ def brief(wb: Workbench) -> dict:
         safe.append({"name": name,
                      "differs": {k: [an.tune.values.get(k), t.values[k]] for k in changed_keys(an.tune, t) if k in keys},
                      "verdict": ass["verdict"], "axes": {ax: _compact_axis(e) for ax, e in ass["axes"].items()}})
+    summary = [f"model: {ident['source']} identification"
+               + (f", gain uncertainty ±{(ident['uncertainty']['k_hi'] - 1) * 100:.0f} %" if ident.get("uncertainty") else "")
+               + (f"; missing axes {ident['missing_axes']}" if ident["missing_axes"] else ""),
+               f"current tune: {cur['verdict']} ({'relative' if wb.relative_gate else 'absolute'} gate)"]
+    for ax, e in cur["axes"].items():
+        h, fu, w = e["hover"], e["full"], e["worst"]
+        summary.append(f"{ax}: hover fc {h['fc']} Hz, Ms {h['ms']}@{h.get('ms_hz')} Hz; full PM {fu['pm']}°; "
+                       f"worst PM {w['pm']}° ({e.get('worst_case', {}).get('pm', '')}); noise {e.get('noise_vs_safe')}x safe")
+    for s_ in safe:
+        summary.append(f"proven-safe {s_['name']}: {s_['verdict']}, differs in {len(s_['differs'])} settings")
+    summary += [f"finding [{f['severity']}] {f['summary']}" for f in getattr(an, "diagnosis", []) if f["severity"] != "info"]
     return {
+        "summary": summary,
         "bftune": __version__,
         "craft": an.craft, "firmware": an.firmware, "loop_hz": src.loop_hz, "log_rate_hz": src.fs,
         "style": wb.style,
