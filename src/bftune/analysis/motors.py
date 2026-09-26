@@ -33,7 +33,7 @@ def rpm_events(fl: Flight) -> list[dict]:
             cmd = float(np.mean(fl.motor[a:b, m]))
             others = float(np.median(np.delete(fl.motor[a:b], m, axis=1)))
             w0, w1 = max(0, a - int(0.5 * fl.fs)), min(fl.n, b + int(0.5 * fl.fs))
-            crash = gyro_max[w0:w1].max() >= 1900 or not armed[w1 - 1]
+            crash = gyro_max[w0:w1].max() >= 1990 or not armed[w1 - 1]  # gyro pegged at its 2000 deg/s range, or disarm
             if crash:
                 kind = "crash"
             elif cmd < 0.2 or cmd < 0.5 * others:

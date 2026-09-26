@@ -107,22 +107,18 @@ def judgement(fl: FlightSummary, idn: Identification, tune: Tune, style: str = "
                             f"{rx:.0f} Hz link: setpoint/FF smoothing cutoff {c_old:.0f}→{c_new:.0f} Hz, stick latency "
                             f"{d_old:.1f}→{d_new:.1f} ms"))
     # Dynamic idle: keep a speed floor in dives/propwash (authority and desync protection).
-    if 25 in fl.idle_q:
-        idle_hz = fl.idle_hz(25)
+    if 20 in fl.idle_q:  # p20 of natural idle, as in the idle design case (search.idle_motor_hz)
+        idle_hz = fl.idle_hz(20)
         rpm = idle_hz * 60.0
-        val = int(np.clip(round(0.9 * rpm / 100), 20, 120))
+        val = int(np.clip(round(0.9 * rpm / 100), 10, 200))  # firmware range 0-200 (x100 rpm), cli/settings.c
         if tune.i("dyn_idle_min_rpm") == 0 or abs(tune.i("dyn_idle_min_rpm") - val) > 5:
             out.append(Decision("dyn_idle_min_rpm", str(val),
                                 f"natural idle ≈{rpm:.0f} rpm; floor at 90% keeps motor authority during dives and "
                                 f"flips (propwash) without raising normal idle"))
-    # RPM filter weights: every harmonic that exists in gyroUnfilt should be notched at full depth;
-    # a notch at >= 2x the motor frequency costs < 0.5 deg of phase at crossover.
-    if tune.values.get("rpm_filter_weights") != "100,100,100" and tune.i("rpm_filter_harmonics") > 0:
-        out.append(Decision("rpm_filter_weights", "100,100,100",
-                            "motor harmonics are visible in the unfiltered gyro; full-depth RPM notches cost "
-                            "almost no phase at crossover"))
+    # RPM filter weights are left to the evidence (which harmonics the spectrogram shows; `sweep rpm_filter_weights`)
     # I-term relax cutoff: lower = less bounce-back after flips, higher = tighter tracking
     relax = {"race": 20, "freestyle": 15, "cinematic": 10}.get(style, 15)
     if tune.i("iterm_relax_cutoff") != relax:
-        out.append(Decision("iterm_relax_cutoff", str(relax), f"{style}: I-term relax at {relax} Hz"))
+        out.append(Decision("iterm_relax_cutoff", str(relax), f"{style} convention: I-term relax at {relax} Hz "
+                            "(check bounce_back in the next log)"))
     return out

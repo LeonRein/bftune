@@ -26,7 +26,7 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob, Grep
    - **validity**: range problems.
 
    Compare with the current tune in plain words: "more responsive at hover, but full-throttle PM
-   drops to 31°: expect oscillation on punch-outs".
+   drops from 44° to 31°, close to the safety floor: less damping on punch-outs".
 5. Check the pitfalls:
    - `simplified_*` sliders left ON, which overwrite explicit values the next time the Configurator
      saves;
@@ -35,7 +35,8 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob, Grep
    - dynamic notch removed while `bftune noise` shows persistent non-RPM peaks;
    - gyro filtering at 1-3 kHz weaker than any flown tune;
    - TPA breakpoint below hover;
-   - FF so high that `ff` shows > 15 % flick overshoot.
+   - FF so high that the as-flown step peak (`assess`, `ff`) is well above what the pilot flew with
+     (`peak_max`).
 6. If it FAILs, propose the smallest change that passes (`sweep` the offending knob) and explain why.
 
 With the `bftune:evidence` rules, a FAIL on the robust variants of a tune that already flew well

@@ -118,3 +118,28 @@ def test_next_tune_dir_counts_history(tmp_path: Path):
 
     (tmp_path / "history.md").write_text("# q\n\n## 01 - 2026-09-26 - a\n\n## 02 - 2026-09-26 - b\n")
     assert next_tune_dir(tmp_path).name.startswith("03-")
+
+
+def test_scaled_band():
+    from bftune.analysis.profile import scaled_band
+
+    assert scaled_band(175.0, 0.088, 0.47, 1000.0, (15, 80)) == pytest.approx((15.4, 82.25))
+    assert scaled_band(1200.0, 0.088, 0.47, 1000.0, (15, 80))[1] == 450.0  # capped below Nyquist
+    assert scaled_band(None, 0.088, 0.47, 1000.0, (15, 80)) == (15, 80)
+
+
+@pytest.mark.slow
+def test_profile_replay_and_as_flown_step(twin, tmp_path: Path):
+    from bftune.pipeline import analyze
+    from bftune.workbench import Workbench, brief
+
+    an = analyze(str(twin[1]), None, tmp_path, log=lambda *_: None)
+    prof = an.extra["profile"]
+    assert prof["hover_motor_hz"] and 0.05 < prof["hover_throttle"] < 0.9
+    wb = Workbench(tmp_path)
+    a = wb.assess(wb.logged, steps=True, axes=[0])
+    assert "as_flown" in a["axes"]["roll"]["step"]
+    assert wb.target_sources["mid_throttle"].startswith("from the log")
+    assert wb.peak_max.get("roll") is not None
+    b = brief(wb)
+    assert b["flight_profile"]["hover_throttle"] == prof["hover_throttle"]

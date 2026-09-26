@@ -43,7 +43,6 @@ class Goals:
     noise_budget: float = 1.0  # motor noise vs the proven-safe level; the agent sets it from motor temperature
     perf_band: tuple[float, float] = (3.0, 60.0)
     idle_weight: float = 0.6  # propwash: weight of the idle case in the objective
-    max_i_zero_ratio: float = 0.2  # I zero frequency <= ratio * crossover
     dmax_ratio_max: float = 1.6
     # I is set from P (Betaflight units) — attitude hold through flips/wind is a judgement call
     # the linear model cannot score well; defaults follow proven freestyle ratios.
@@ -55,6 +54,10 @@ class Goals:
     gain_range: tuple[float, float] = (0.5, 2.5)  # P and D relative to the logged (anchor) tune
     ff_overshoot_flick: float = 10.0  # feedforward targets (% overshoot of a 300 deg/s flick / a fast snap)
     ff_overshoot_snap: float = 15.0
+    peak_max: tuple | None = None  # as-flown step peak per axis [%]; None = the flown tune's own (workbench)
+    mid_throttle: float = 0.5  # the "mid" design case; the workbench sets it from the throttle the pilot uses
+    gain_uncertainty: float = 0.10  # robust variants: plant gain x(1+u) and /(1+1.25u), delay +y ms (identification)
+    delay_uncertainty_ms: float = 0.3
 
     @classmethod
     def for_style(cls, style: str, noise_budget: float | None = None) -> Goals:
@@ -108,11 +111,14 @@ def output_limit_ratio(tune: Tune, idn: Identification) -> float:
     return tune.i("motor_output_limit") / max(getattr(idn, "motor_output_limit", 100), 1)
 
 
-def build_cases(fl: FlightSummary, idn: Identification, tune: Tune, axis: int, goals: Goals) -> list[Case]:
+def build_cases(fl: FlightSummary, idn: Identification, tune: Tune, axis: int, goals: Goals,
+                search: bool = False) -> list[Case]:
+    """Design cases for one axis. `search=True` (optimizers) adds the D-max cases whenever a D-max driver is enabled,
+    so a search that raises d_max above d is constrained by them; the verdict adds them when d_max > d."""
     ai = idn.axes[axis]
     cases: list[Case] = []
     thr_id = ai.op.throttle
-    points = [("idle", 0.02, goals.idle_weight), ("hover", thr_id, 1.0), ("mid", 0.5, 0.6), ("full", 1.0, 0.0)]
+    points = [("idle", 0.02, goals.idle_weight), ("hover", thr_id, 1.0), ("mid", goals.mid_throttle, 0.6), ("full", 1.0, 0.0)]
     for label, thr, w in points:
         if label == "idle":
             mhz = np.full(len(ai.op.motor_hz), idle_motor_hz(fl, tune))
@@ -123,15 +129,15 @@ def build_cases(fl: FlightSummary, idn: Identification, tune: Tune, axis: int, g
         base = ai.plant.scaled(float(np.mean(mhz)), ai.op.vbat, idn.motor)
         dn = ai.op.dyn_notch_hz
         # D only rises above base D through d_max_gain (gyro) or d_max_advance (setpoint): pid.c
-        dmax_active = tune.i(f"d_max_{AXES[axis]}") > tune.i(f"d_{AXES[axis]}") and (
-            tune.i("d_max_gain") > 0 or tune.i("d_max_advance") > 0)
+        drivers = tune.i("d_max_gain") > 0 or tune.i("d_max_advance") > 0
+        dmax_active = drivers and (search or tune.i(f"d_max_{AXES[axis]}") > tune.i(f"d_{AXES[axis]}"))
         for boost in ((0.0, 1.0) if dmax_active else (0.0,)):
             op = OperatingPoint(throttle=thr, motor_hz=list(mhz), vbat=ai.op.vbat, d_boost=boost, dyn_notch_hz=dn,
                                 label=f"{label}/d{'max' if boost else ''}")
             cases.append(Case(op.label, op, dict(base.params), base.structure, w if boost == 0 else 0.0, False))
             # uncertainty variants (constraint only)
-            unc = getattr(idn, "uncertainty", None) or {"k_hi": 1.10, "k_lo": 0.88, "dT": 0.0003}
-            for vf, dT, tag in ((unc["k_hi"], unc["dT"], "hiK+delay"), (unc["k_lo"], 0.0, "loK")):
+            u, dT_ = goals.gain_uncertainty, goals.delay_uncertainty_ms / 1000.0
+            for vf, dT, tag in ((1.0 + u, dT_, "hiK+delay"), (1.0 / (1.0 + 1.25 * u), 0.0, "loK")):
                 p = dict(base.params)
                 p["K"] *= vf
                 p["T"] += dT
@@ -183,7 +189,7 @@ class AxisProblem:
         self.noise_Q = None
         self.noise_ref = noise_ref
         if nm is not None and nm.bands:
-            fn = np.linspace(70.0, 0.5 * loop_hz / idn.time_scale, 3000)
+            fn = np.linspace(getattr(nm, "motion_hz", 70.0), 0.5 * loop_hz / idn.time_scale, 3000)
             dfn = fn[1] - fn[0]
             Q = []
             for b in nm.bands:
@@ -344,7 +350,7 @@ def score_tune(fl, idn, nm, tune, goals, noise_ref, axes=(0, 1, 2), maxiter=40, 
         if excess > 0:  # weaker HF filtering than any proven tune: do not trust the noise model there
             total += 100.0 * excess
     for axis in axes:
-        cases = build_cases(fl, idn, tune, axis, goals)
+        cases = build_cases(fl, idn, tune, axis, goals, search=True)
         prob = AxisProblem(tune, axis, cases, idn, fl.loop_hz, nm, goals, noise_ref.get(axis) if noise_ref else None)
         if anchor is not None:
             prob.anchor = (anchor.i(f"p_{AXES[axis]}"), anchor.i(f"d_{AXES[axis]}"))

@@ -136,5 +136,6 @@ def identify_freestyle(fl: Flight, tune: Tune, prior_T: float = PRIOR_T) -> Iden
     idn = Identification(axes=axes, motor=motor, runs=[], dt=dt, time_scale=time_scale, notes=notes,
                          thrust_linear=tune.i("thrust_linear"), motor_output_limit=tune.i("motor_output_limit"))
     idn.source = "freestyle"
-    idn.uncertainty = {"k_hi": 1.4, "k_lo": 0.7, "dT": 0.0008}  # synthetic twins: K within about ±40 %
+    idn.uncertainty = {"k_hi": 1.4, "k_lo": 0.7, "dT": 0.0008,  # synthetic twins: K within about ±40 %
+                       "source": "no chirp: stick-input identification (±40 %, from synthetic twins)"}
     return idn

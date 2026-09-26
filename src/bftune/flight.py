@@ -103,6 +103,15 @@ def load_flight(bbl_path: str | Path, dump_path: str | Path | None = None, log_i
     return flight_from_log(log, cfg)
 
 
+def motor_saturated(fl: Flight) -> np.ndarray:
+    """(N,) True where any motor sits at its maximum command: the motorOutput range scaled by motor_output_limit
+    (mixer.c), so it also works with a limit below 100 % or a non-DShot protocol."""
+    if fl.motor.size == 0:
+        return np.zeros(fl.n, bool)
+    lim = fl.cfg.int("motor_output_limit", 100) / 100.0 if fl.cfg is not None else 1.0
+    return np.any(fl.motor >= 0.995 * lim, axis=1)
+
+
 def exclude(fl: Flight, windows: list[tuple[float, float]]) -> Flight:
     """Treat these time windows (s) as disarmed, so every flight-data analysis skips them (a crash, a bench test)."""
     for t0, t1 in windows or []:

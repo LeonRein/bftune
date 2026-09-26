@@ -4,6 +4,11 @@ Every finding carries an id, severity (info | warn | problem), a one-line summar
 measured evidence and pointers to likely causes and knobs. The agent decides what to do.
 Findings are heuristics on flight data only (no model), so they also work on logs without
 chirps and on quads whose plant could not be identified.
+
+Scales come from the log itself, not from a 5": frequency bands scale with the hover motor frequency (prop size
+sets motor speed and, with it, the control bandwidth; the ratios reproduce the bands first tuned on a 5" at ~170 Hz),
+throttle bands with the hover throttle, stick thresholds with the pilot's own moves. Severity only ranks findings
+for attention; its thresholds are heuristics from a few quads. Judge the evidence, and compare logs of this quad.
 """
 
 from __future__ import annotations
@@ -12,8 +17,9 @@ from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
-from ..flight import AXES, BOX_ANGLE, BOX_HORIZON, Flight
+from ..flight import AXES, BOX_ANGLE, BOX_HORIZON, Flight, motor_saturated
 from ..sysid.chirp import find_chirps
+from .profile import hover, scaled_band
 
 
 @dataclass
@@ -72,19 +78,21 @@ def saturation(fl: Flight) -> list[Finding]:
     armed = fl.mode(0)
     if not armed.any() or fl.motor_raw.size == 0:
         return out
-    hi = np.any(fl.motor_raw >= 2046, axis=1) & armed
-    part = hi & (fl.throttle < 0.75)  # saturation below full throttle: authority is missing
+    hi = motor_saturated(fl) & armed
+    thr_h, _ = hover(fl)
+    part_thr = thr_h + 0.6 * (1 - thr_h)  # well below a punch-out (0.71 on a 5" hovering at 0.27)
+    part = hi & (fl.throttle < part_thr)  # saturation below full throttle: authority is missing
     frac = float(hi.mean() / max(armed.mean(), 1e-9))
     pfrac = float(part.mean() / max(armed.mean(), 1e-9))
-    if frac > 0.01:
+    if frac > 0:
         segs = _segments(hi, int(0.02 * fl.fs))
         thr = float(np.median(fl.throttle[hi])) if hi.any() else 0.0
         sev = "problem" if pfrac > 0.03 else ("warn" if pfrac > 0.01 else "info")
         out.append(Finding("motor_saturation", sev,
-                           f"a motor is at 100 % for {100*frac:.1f} % of armed time "
-                           f"({100*pfrac:.1f} % below 75 % throttle)",
-                           {"fraction": round(frac, 4), "fraction_below_75pct_throttle": round(pfrac, 4),
-                            "episodes": len(segs), "median_throttle": round(thr, 2)},
+                           f"a motor is at its maximum for {100*frac:.1f} % of armed time "
+                           f"({100*pfrac:.1f} % below {100*part_thr:.0f} % throttle)",
+                           {"fraction": round(frac, 4), "fraction_below_part_throttle": round(pfrac, 4),
+                            "part_throttle": round(part_thr, 2), "episodes": len(segs), "median_throttle": round(thr, 2)},
                            ["punch-outs at full throttle (normal)", "too much P/D (or FF) for the available authority",
                             "heavy build / weak motors (saturation at part throttle)"],
                            ["TPA", "check that saturation is only at full throttle", "motor_output_limit"]))
@@ -93,29 +101,37 @@ def saturation(fl: Flight) -> list[Finding]:
     no_chirp = np.ones(fl.n, bool)
     for r in find_chirps(fl):
         no_chirp[r.start : r.end] = False
-    hov = armed & calm & no_chirp & (np.abs(fl.throttle - np.median(fl.throttle[armed])) < 0.05)
+    hov = armed & calm & no_chirp & (np.abs(fl.throttle - thr_h) < 0.05)
     if hov.sum() > fl.fs * 2:
         med = np.median(fl.motor[hov], axis=0)
+        tl = fl.cfg.int("thrust_linear", 0) if fl.cfg is not None else 0
+        if tl > 0:  # compare on the thrust scale: undo the firmware curve (pid.c pidApplyThrustLinearization)
+            e, m = tl / 100.0, np.linspace(0, 1, 2001)
+            med = np.interp(med, m * (1 + e * (1 - m) * (1 + e * (1 - 2 * m))), m)
         spread = float((med.max() - med.min()) / max(med.mean(), 1e-6))
-        if spread > 0.10:
-            ev = {"median_outputs": np.round(med, 3).tolist()}
-            where = ""
-            if len(med) == 4:  # Betaflight QUADX mixer order: 1 rear-right, 2 front-right, 3 rear-left, 4 front-left
-                cols = {"roll": np.array([-1, -1, 1, 1]), "pitch": np.array([1, -1, 1, -1]),
-                        "yaw": np.array([-1, 1, 1, -1])}
-                trim = {k: float(med @ c / 4) / max(float(med.mean()), 1e-6) for k, c in cols.items()}
-                ev["trim_pct"] = {k: round(100 * v, 1) for k, v in trim.items()}
-                desc = {"roll": ("left motors work harder: CG left of centre", "right motors work harder: CG right of centre"),
-                        "pitch": ("rear motors work harder: CG behind centre", "front motors work harder: CG ahead of centre"),
-                        "yaw": ("motors 2+3 work harder (a constant yaw correction: twisted motor, prop mismatch)",
-                                "motors 1+4 work harder (a constant yaw correction: twisted motor, prop mismatch)")}
-                k = max(trim, key=lambda q: abs(trim[q]))
-                where = (f"; mostly {k}: {desc[k][0 if trim[k] > 0 else 1]} (QUADX mixer positions; "
-                         "motor_output_reordering only remaps output pins, not these positions)")
-            out.append(Finding("motor_imbalance", "warn" if spread < 0.3 else "problem",
-                               f"motor outputs at hover differ by {100*spread:.0f} %{where}", ev,
-                               ["CG offset (battery position)", "bent/chipped prop", "weak motor or bearing"],
-                               ["check props/motors; move battery; rerun after fixing (tuning cannot fix this)"]))
+        # always reported: the spread and trim are data; the severity below is a heuristic
+        ev = {"median_outputs": np.round(med, 3).tolist()}
+        where = ""
+        quadx = len(med) == 4 and (fl.cfg is None or fl.cfg.str("mixer", "QUADX").upper() in ("QUADX", ""))
+        if quadx:  # Betaflight QUADX mixer order (mixer.c): 1 rear-right, 2 front-right, 3 rear-left, 4 front-left
+            cols = {"roll": np.array([-1, -1, 1, 1]), "pitch": np.array([1, -1, 1, -1]),
+                    "yaw": np.array([-1, 1, 1, -1])}
+            trim = {k: float(med @ c / 4) / max(float(med.mean()), 1e-6) for k, c in cols.items()}
+            ev["trim_pct"] = {k: round(100 * v, 1) for k, v in trim.items()}
+            desc = {"roll": ("left motors work harder: CG left of centre", "right motors work harder: CG right of centre"),
+                    "pitch": ("rear motors work harder: CG behind centre", "front motors work harder: CG ahead of centre"),
+                    "yaw": ("motors 2+3 work harder (a constant yaw correction: twisted motor, prop mismatch)",
+                            "motors 1+4 work harder (a constant yaw correction: twisted motor, prop mismatch)")}
+            k = max(trim, key=lambda q: abs(trim[q]))
+            where = (f"; mostly {k}: {desc[k][0 if trim[k] > 0 else 1]} (QUADX mixer positions; "
+                     "motor_output_reordering only remaps output pins, not these positions)")
+        ev["spread_pct"] = round(100 * spread, 1)
+        if tl > 0:
+            ev["thrust_scale"] = f"thrust_linear {tl} undone, so logs with different thrust_linear compare"
+        out.append(Finding("motor_imbalance", "info" if spread < 0.10 else ("warn" if spread < 0.3 else "problem"),
+                           f"motor outputs at hover differ by {100*spread:.0f} %{where}", ev,
+                           ["CG offset (battery position)", "bent/chipped prop", "weak motor or bearing"],
+                           ["check props/motors; move battery; rerun after fixing (tuning cannot fix this)"]))
     return out
 
 
@@ -164,9 +180,12 @@ def oscillation(fl: Flight) -> list[Finding]:
         return out
     f = np.fft.rfftfreq(n, 1 / fl.fs)
     w = np.hanning(n)
-    m = (f >= 15) & (f <= min(200, fl.fs / 2 - 10))
+    thr_h, hz_h = hover(fl)
+    f_lo, f_hi = scaled_band(hz_h, 0.085, 1.2, fl.fs, (15.0, 200.0))  # 15-200 Hz on a 5" at ~170 Hz
+    m = (f >= f_lo) & (f <= min(f_hi, fl.fs / 2 - 10))
     lf = np.log(f[m])
-    bands = (("low throttle", 0.0, 0.2), ("mid throttle", 0.2, 0.5), ("high throttle", 0.5, 1.01))
+    lo_t, hi_t = max(0.02, thr_h - 0.04), thr_h + 0.35 * (1 - thr_h)  # 0.2 / 0.5 on a 5" hovering at 0.24
+    bands = (("low throttle", 0.0, lo_t), ("mid throttle", lo_t, hi_t), ("high throttle", hi_t, 1.01))
     for axis in range(3):
         found = []
         for label, lo, hi in bands:
@@ -183,14 +202,32 @@ def oscillation(fl: Flight) -> list[Finding]:
             r = P - trend
             k = int(np.argmax(r))
             if 0 < k < len(r) - 1 and r[k] > 6.0 and r[k] >= r[k - 1] and r[k] >= r[k + 1]:
-                found.append((label, float(f[m][k]), float(r[k]), len(specs)))
-        for label, fr, db, nwin in found:
-            ev = {"freq_hz": round(fr, 1), "db_above_trend": round(db, 1), "windows": nwin}
+                found.append((label, float(f[m][k]), float(r[k]), len(specs), lo, hi))
+        for label, fr, db, nwin, lo, hi in found:
+            ev = {"freq_hz": round(fr, 1), "db_above_trend": round(db, 1), "windows": nwin,
+                  "band_hz": [round(f_lo), round(f_hi)], "throttle_band": label}
             causes = ["sensitivity peak from low phase margin (P/D too high for the delay, too much filter lag)",
-                      "mechanical resonance not filtered", "TPA insufficient (high throttle)"]
+                      "mechanical resonance not filtered"]
+            if label.startswith("high"):
+                causes.append("TPA insufficient (high throttle)")
             extra = ""
-            if label.startswith("low") and fl.motor_hz is not None:
-                lowthr = fl.mode(0) & (fl.throttle < 0.2)
+            if hz_h and fr > 0.6 * hz_h:  # far above any crossover: not the loop's sensitivity peak
+                ev["above_control_band"] = True
+                causes = ["a motor line not fully notched (RPM filter Q/weights/harmonics, telemetry)",
+                          "vibration or a frame resonance (prop balance, bent shaft, soft mount, loose part)"]
+                extra = f"; far above the control band (hover motor ~{hz_h:.0f} Hz): not the loop's sensitivity peak"
+                selb = fl.mode(0) & (fl.throttle >= lo) & (fl.throttle < hi)
+                if fl.motor_hz is not None and fl.motor_hz.size and selb.sum() > fl.fs:
+                    mhz = float(np.median(fl.motor_hz[selb].mean(axis=1)))
+                    for h in (1, 2, 3):
+                        fa = abs(((h * mhz + fl.fs / 2) % fl.fs) - fl.fs / 2)  # where that harmonic lands after aliasing
+                        if abs(fr - fa) < 0.12 * max(fa, 1.0):
+                            ev["motor_harmonic"] = h
+                            extra += (f", at the motor {'fundamental' if h == 1 else f'harmonic x{h}'} of this band "
+                                      f"(~{fa:.0f} Hz{' aliased' if h * mhz > fl.fs / 2 else ''})")
+                            break
+            if label.startswith("low") and fl.motor_hz is not None and not ev.get("above_control_band"):
+                lowthr = fl.mode(0) & (fl.throttle < lo_t)
                 if lowthr.sum() > fl.fs:
                     idle = np.percentile(fl.motor_hz[lowthr].mean(axis=1), [10, 50])
                     rmin = fl.cfg.int("rpm_filter_min_hz", 100)
@@ -210,7 +247,8 @@ def oscillation(fl: Flight) -> list[Finding]:
                         else:
                             extra = f"; near the idle motor frequency ({idle[0]:.0f}-{idle[1]:.0f} Hz), which the RPM filter covers"
                             causes.insert(0, "body motion at low throttle (broad hump, not a motor line) or idle-case loop peak")
-            out.append(Finding(f"resonance_{AXES[axis]}_{label.split()[0]}", "problem" if db > 10 else "warn",
+            sev = "info" if ev.get("above_control_band") else ("problem" if db > 10 else "warn")
+            out.append(Finding(f"resonance_{AXES[axis]}_{label.split()[0]}", sev,
                                f"{AXES[axis]}: tracking-error peak at ~{fr:.0f} Hz, +{db:.0f} dB above trend ({label}){extra}",
                                ev, causes,
                                ["compare with assess 'Ms' and its frequency; reduce P/D or filter lag; TPA; dyn notch",
@@ -248,7 +286,9 @@ def propwash(fl: Flight) -> list[Finding]:
     ok = _acro_mask(fl)
     thr = fl.throttle
     dthr = np.gradient(thr) * fl.fs
-    sos = butter(2, [15, min(80, 0.45 * fl.fs)], "bandpass", fs=fl.fs, output="sos")
+    thr_h, hz_h = hover(fl)
+    b_lo, b_hi = scaled_band(hz_h, 0.088, 0.47, fl.fs, (15.0, 80.0))  # 15-80 Hz on a 5" at ~170 Hz
+    sos = butter(2, [b_lo, b_hi], "bandpass", fs=fl.fs, output="sos")
     e = fl.setpoint[:, :2] - fl.gyro[:, :2]
     eb = np.zeros_like(e)
     for a, b in _segments(ok, int(0.5 * fl.fs)):
@@ -260,19 +300,19 @@ def propwash(fl: Flight) -> list[Finding]:
             rms = float(np.sqrt(np.mean(eb[s : s + n] ** 2)))
             sp_move = np.std(fl.setpoint[s : s + n, :2])
             t = np.mean(thr[s : s + n])
-            if t < 0.25 and np.min(dthr[max(a, s - n) : s + n]) < -1.5:
+            if t < thr_h and np.min(dthr[max(a, s - n) : s + n]) < -1.5:
                 if sp_move < 100:
                     chop.append(rms)
                     worst.append((rms, float(fl.t[s])))
                 elif sp_move > 200:
                     flip.append(rms)
                     worst.append((rms, float(fl.t[s])))
-            elif 0.25 < t < 0.5 and sp_move < 30:
+            elif thr_h <= t < thr_h + 0.25 and sp_move < 30:
                 calm.append(rms)
     if len(calm) < 3 or len(chop) + len(flip) < 3:
         return []
     c0 = float(np.median(calm))
-    ev = {"calm_rms_deg_s": round(c0, 2),
+    ev = {"calm_rms_deg_s": round(c0, 2), "band_hz": [round(b_lo), round(b_hi)],
           "worst_at_s": [round(t, 1) for _, t in sorted(worst, reverse=True)[:3]]}  # for `bftune plot --window`
     parts = []
     for name, v in (("chops", chop), ("flips_rolls", flip)):
@@ -286,7 +326,8 @@ def propwash(fl: Flight) -> list[Finding]:
     else:
         sev = "info"
     return [Finding("propwash", sev,
-                    f"15-80 Hz wobble at low throttle after chops: {'; '.join(parts)}; calm cruise {c0:.1f} deg/s",
+                    f"{b_lo:.0f}-{b_hi:.0f} Hz wobble at low throttle after chops: {'; '.join(parts)}; calm cruise "
+                    f"{c0:.1f} deg/s",
                     ev,
                     ["low authority at low throttle (motor lag, idle rpm)", "sensitivity peak in 20-60 Hz",
                      "too little D",
@@ -301,21 +342,28 @@ def bounce_back(fl: Flight) -> list[Finding]:
     ok = _acro_mask(fl)
     for axis in range(2):
         sp = fl.setpoint[:, axis]
-        fast = ok & (np.abs(sp) > 300)
-        ends, at = [], []
+        if not ok.any():
+            continue
+        fast_th = max(150.0, 0.5 * float(np.percentile(np.abs(sp[ok]), 99.5)))  # the pilot's own fast moves
+        fast = ok & (np.abs(sp) > fast_th)
+        ends, at, amps = [], [], []
         for a, b in _segments(fast, int(0.08 * fl.fs)):
             e_end = b + int(0.15 * fl.fs)
             if e_end < fl.n and np.all(np.abs(sp[b : e_end]) < 60):
                 sign = np.sign(np.mean(sp[a:b]))
                 peak_opp = float(np.max(-sign * fl.gyro[b:e_end, axis]))
                 ends.append(peak_opp)
+                amps.append(float(np.max(np.abs(sp[a:b]))))
                 at.append((peak_opp, float(fl.t[b])))
         if len(ends) >= 3:
             med = float(np.median(ends))
-            if med > 40:
-                out.append(Finding(f"bounce_back_{AXES[axis]}", "warn" if med < 100 else "problem",
-                                   f"{AXES[axis]}: median {med:.0f} deg/s opposite rebound after fast moves",
-                                   {"events": len(ends), "median_rebound_deg_s": round(med, 1),
+            rel = 100 * med / max(float(np.median(amps)), 1.0)
+            if med > 0:
+                sev = "info" if rel < 8 else ("warn" if rel < 20 else "problem")
+                out.append(Finding(f"bounce_back_{AXES[axis]}", sev,
+                                   f"{AXES[axis]}: median {med:.0f} deg/s opposite rebound after fast moves "
+                                   f"({rel:.0f} % of the move, moves > {fast_th:.0f} deg/s)",
+                                   {"events": len(ends), "median_rebound_deg_s": round(med, 1), "rebound_pct_of_move": round(rel, 1),
                                     "worst_at_s": [round(t, 1) for _, t in sorted(at, reverse=True)[:3]]},
                                    ["I-term windup (iterm_relax too high/cutoff)", "FF overshoot", "low damping (D)"],
                                    ["iterm_relax_cutoff", "feedforward", "D"]))
@@ -328,7 +376,9 @@ def throttle_punch(fl: Flight) -> list[Finding]:
 
     ok = _acro_mask(fl)
     dthr = np.gradient(fl.throttle) * fl.fs
-    sos = butter(2, 10.0, "lowpass", fs=fl.fs, output="sos")  # attitude drift band (I-term job)
+    _, hz_h = hover(fl)
+    lp = scaled_band(hz_h, 0.06, 0.06, fl.fs, (10.0, 10.0))[1]  # attitude drift band (I-term job): 10 Hz on a 5"
+    sos = butter(2, lp, "lowpass", fs=fl.fs, output="sos")
     e = fl.setpoint[:, :2] - fl.gyro[:, :2]
     el = np.zeros_like(e)
     for a, b in _segments(ok, int(0.5 * fl.fs)):
@@ -380,14 +430,18 @@ def heat_risk(fl: Flight) -> list[Finding]:
     armed = fl.mode(0)
     if fl.motor.size == 0 or armed.sum() < fl.fs * 2:
         return []
-    m = fl.motor[armed]
-    hp = m - np.apply_along_axis(lambda x: np.convolve(x, np.ones(15) / 15, "same"), 0, m)
+    from scipy.signal import butter, sosfiltfilt
+
+    _, hz_h = hover(fl)
+    fc = scaled_band(hz_h, 0.4, 0.4, fl.fs, (70.0, 70.0))[1]  # above the control band: 70 Hz on a 5"
+    sos = butter(2, fc, "highpass", fs=fl.fs, output="sos")
+    hp = sosfiltfilt(sos, fl.motor, axis=0)[armed]
     rms = float(np.sqrt(np.mean(hp[20:-20] ** 2)) * 100)
-    # absolute levels depend on craft and log rate: compare between logs of the same quad
-    sev = "warn" if rms > 3.0 else "info"
-    return [Finding("motor_hf_noise", sev, f"high-frequency motor-command noise {rms:.2f} % RMS",
-                    {"hf_rms_pct": round(rms, 2)}, ["D-term noise", "weak filtering", "resonance"],
-                    ["compare with the pilot's motor temperatures; noise model budget"])]
+    # no severity from an absolute level: it depends on craft, log rate and pilot. Compare logs of this quad
+    # and the pilot's motor temperatures (build a table in quad.md).
+    return [Finding("motor_hf_noise", "info", f"motor-command noise above {fc:.0f} Hz: {rms:.2f} % RMS",
+                    {"hf_rms_pct": round(rms, 3), "above_hz": round(fc)}, ["D-term noise", "weak filtering", "resonance"],
+                    ["compare with other logs of this quad and the motor temperatures the pilot reported"])]
 
 
 def diagnose(fl: Flight) -> list[dict]:

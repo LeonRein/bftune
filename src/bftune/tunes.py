@@ -106,7 +106,11 @@ def format_tunes(res: dict) -> str:
                        "the tune on the quad now (pass it to analyze: the model uses the log's settings).")
             for k, v in list(d["differences_to_closest"].items())[:12]:
                 out.append(f"    {k:28s} log {v['log']} -> dump {v['dump']}")
-    if len(res["groups"]) > 1 or ("dump" in res and not res["dump"]["matches"]):
+    if "dump" in res and res["dump"]["matches"]:
+        if len(res["groups"]) > 1:
+            out.append(f"The dump says tune {res['dump']['matches']} is on the quad (confirm it is still current); ask how "
+                       "warm the motors got with each tune.")
+    elif len(res["groups"]) > 1 or "dump" in res:
         out.append("Ask the pilot which tune is on the quad now and how warm the motors got with each tune.")
     if any(str(f.get("debug_mode")) == "96" for f in res["sessions"].values()):
         out.append("(debug 96 = CHIRP: those logs carry the chirp excitation.)")

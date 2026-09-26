@@ -32,42 +32,48 @@ def shape_metrics(t: np.ndarray, y: np.ndarray, level: float = 1.0) -> dict:
             "undershoot_pct": float(max(0.0, (1 - dip) * 100)) if yn[k] > 1 else 0.0}
 
 
-def log_step_response(
-    fl: Flight, axis: int, win_s: float = 2.0, resp_s: float = 0.5, min_sp_rms: float = 30.0,
-    max_throttle: float | None = None, gyro: np.ndarray | None = None,
-) -> dict | None:
-    """`gyro` (N,) replaces the logged gyro of this axis, e.g. the model's answer to the logged setpoint: the same
-    windows and estimator then give a measured-vs-model comparison free of estimator bias."""
+def step_windows(fl: Flight, axis: int, win_s: float = 2.0, min_sp_rms: float = 30.0,
+                 max_throttle: float | None = None) -> list[int]:
+    """Start indices of the analysis windows: acro, no chirp, enough stick activity on this axis."""
     n = int(win_s * fl.fs)
-    m = int(resp_s * fl.fs)
-    steps = []
+    out = []
     for a, b in freestyle_windows(fl, min_len_s=win_s):
         for s in range(a, b - n, n // 2):
-            x = fl.setpoint[s : s + n, axis]
-            y = (fl.gyro_unfilt[:, axis] if gyro is None else gyro)[s : s + n]
-            if np.std(x) < min_sp_rms:
+            if np.std(fl.setpoint[s : s + n, axis]) < min_sp_rms:
                 continue
             if max_throttle is not None and np.mean(fl.throttle[s : s + n]) > max_throttle:
                 continue
-            w = np.hanning(n)
-            X = np.fft.rfft((x - x.mean()) * w, 2 * n)
-            Y = np.fft.rfft((y - y.mean()) * w, 2 * n)
-            eps = EPS * np.max(np.abs(X) ** 2)
-            h = np.fft.irfft(Y * np.conj(X) / (np.abs(X) ** 2 + eps), 2 * n)[:m]
-            st = np.cumsum(h)
-            # the settled level is biased low (little setpoint power near DC after windowing), so only the shape
-            # and timing are meaningful: normalise each window by its own settled level, drop implausible ones
-            level = st[-m // 4 :].mean()
-            if 0.3 < level < 1.5:
-                steps.append(st / level)
+            out.append(int(s))
+    return out
+
+
+def step_estimate(x: np.ndarray, y: np.ndarray, starts: list[int], fs: float, win_s: float = 2.0,
+                  resp_s: float = 0.5) -> dict | None:
+    """Wiener deconvolution of setpoint x -> gyro y over the given windows, integrated to a normalised step."""
+    n, m = int(win_s * fs), int(resp_s * fs)
+    w = np.hanning(n)
+    steps = []
+    for s in starts:
+        xs, ys = x[s : s + n], y[s : s + n]
+        if len(xs) < n:
+            continue
+        X = np.fft.rfft((xs - xs.mean()) * w, 2 * n)
+        Y = np.fft.rfft((ys - ys.mean()) * w, 2 * n)
+        eps = EPS * np.max(np.abs(X) ** 2)
+        st = np.cumsum(np.fft.irfft(Y * np.conj(X) / (np.abs(X) ** 2 + eps), 2 * n)[:m])
+        # the settled level is biased low (little setpoint power near DC after windowing), so only the shape
+        # and timing are meaningful: normalise each window by its own settled level, drop implausible ones
+        level = st[-m // 4 :].mean()
+        if 0.3 < level < 1.5:
+            steps.append(st / level)
     if len(steps) < 3:
         return None
     S = np.array(steps)
-    t = np.arange(m) / fl.fs
+    t = np.arange(m) / fs
     mean = S.mean(axis=0)
     ss = mean[int(0.6 * m) :].mean()
     # standard error of the mean response over the first 150 ms: how far to trust delay and peak
-    se = float(S.std(axis=0)[: int(0.15 * fl.fs)].mean() / np.sqrt(len(steps)))
+    se = float(S.std(axis=0)[: int(0.15 * fs)].mean() / np.sqrt(len(steps)))
     return {
         "t": t,
         "step": mean,
@@ -78,3 +84,14 @@ def log_step_response(
         "se": se,
         "confidence": "good" if se < 0.05 else ("fair" if se < 0.1 else "low"),
     }
+
+
+def log_step_response(
+    fl: Flight, axis: int, win_s: float = 2.0, resp_s: float = 0.5, min_sp_rms: float = 30.0,
+    max_throttle: float | None = None, gyro: np.ndarray | None = None,
+) -> dict | None:
+    """`gyro` (N,) replaces the logged gyro of this axis, e.g. the model's answer to the logged setpoint: the same
+    windows and estimator then give a measured-vs-model comparison free of estimator bias."""
+    starts = step_windows(fl, axis, win_s, min_sp_rms, max_throttle)
+    y = fl.gyro_unfilt[:, axis] if gyro is None else gyro
+    return step_estimate(fl.setpoint[:, axis], y, starts, fl.fs, win_s, resp_s)

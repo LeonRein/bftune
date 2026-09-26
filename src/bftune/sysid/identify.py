@@ -45,6 +45,7 @@ class AxisIdent:
     G_meas: np.ndarray  # plant estimate (unfiltered-gyro path)
     G_meas_f: np.ndarray  # plant estimate via filtered gyro / modelled Fg (dyn notch unknown!)
     coherent_to_hz: float
+    round_gains: list = field(default_factory=list)  # gain of each chirp round / combined fit (repeatability)
 
     @property
     def plant(self) -> Plant:
@@ -140,8 +141,13 @@ def identify(
         Gf = frf.H["yf"] / C.Fg
         f_lo = max(min_fit_hz, 3.0 * min(r.f_start for r in sel))
         use = (frf.f >= f_lo) & (frf.coh["y"] >= coh_min) & (frf.coh["u"] >= 0.8) & (frf.valid_frac >= 0.8)
-        # coherent band: contiguous from f_lo
-        coh_to = frf.f[use].max() if use.any() else f_lo
+        # coherent band: contiguous from f_lo (gaps of one band tolerated; isolated coherent bins further up don't count)
+        idx = np.flatnonzero(use)
+        if idx.size:
+            br = np.flatnonzero(np.diff(idx) > 2)
+            coh_to = float(frf.f[idx[br[0]] if br.size else idx[-1]])
+        else:
+            coh_to = f_lo
         w = weights_from_coherence(frf.coh["y"], frf.coh["u"], frf.valid_frac) * use
         try:
             best, fits = fit_best(frf.f, G, w, structures[axis])
@@ -175,6 +181,7 @@ def identify(
         if not passed:
             chain.notes.append("modelled filter chain disagrees with the log: check firmware version/config source")
         plant = best.plant
+        round_gains = _round_gains(fl, sel, axis, plant, frf.f, use) if len(sel) >= 2 else []
         plant.ref_motor_hz = float(np.mean(op.motor_hz))
         plant.ref_vbat = op.vbat
         plant.ref_throttle = op.throttle
@@ -189,6 +196,7 @@ def identify(
             G_meas=G,
             G_meas_f=Gf,
             coherent_to_hz=float(coh_to),
+            round_gains=round_gains,
         )
     if motor is not None:
         for a, ai in axes.items():
@@ -199,5 +207,39 @@ def identify(
                     f"{AXES[a]}: motor-model tau {t_mm*1000:.0f} ms vs axis fit {t_ax*1000:.0f} ms (>50% apart); only the "
                     "motor model's *trend* with speed is used for scheduling"
                 )
-    return Identification(axes=axes, motor=motor, runs=runs, dt=dt, time_scale=time_scale, notes=notes,
-                          thrust_linear=tune.i("thrust_linear"), motor_output_limit=tune.i("motor_output_limit"))
+    idn = Identification(axes=axes, motor=motor, runs=runs, dt=dt, time_scale=time_scale, notes=notes,
+                         thrust_linear=tune.i("thrust_linear"), motor_output_limit=tune.i("motor_output_limit"))
+    idn.uncertainty = chirp_uncertainty(axes)
+    return idn
+
+
+CONVENTION_GAIN_U = 0.10  # robust variants never narrower than +-10 % gain / +0.3 ms delay (convention)
+
+
+def _round_gains(fl, runs, axis, plant, f_all, use) -> list[float]:
+    """Plant gain of each chirp round relative to the combined fit (geometric mean of |G_round / G_model| over the
+    fit band): how repeatable the identification is on this quad."""
+    out = []
+    for r in runs:
+        try:
+            fr = plant_frf(fl, [r], axis)
+        except Exception:  # noqa: BLE001 - a bad round must not break identification
+            continue
+        m = (fr.coh["y"] >= 0.5) & (fr.f >= f_all[use].min()) & (fr.f <= f_all[use].max()) if use.any() else None
+        if m is None or m.sum() < 4:
+            continue
+        out.append(float(np.exp(np.median(np.log(np.abs(fr.H["y"][m] / plant.fr(fr.f[m])))))))
+    return out
+
+
+def chirp_uncertainty(axes: dict) -> dict:
+    """Robustness variants from the data: the spread of the plant gain between chirp rounds, never below the
+    convention. (Rounds show repeatability, not every model error, hence the floor.)"""
+    spread = [abs(np.log(g)) for ai in axes.values() for g in (getattr(ai, "round_gains", None) or [])]
+    measured = float(np.expm1(max(spread))) if spread else None
+    u = max(CONVENTION_GAIN_U, measured or 0.0)
+    src = (f"chirp rounds: gain spread ±{100 * measured:.0f} % ({sum(len(getattr(ai, 'round_gains', []) or []) for ai in axes.values())} "
+           f"rounds){'; convention floor ±10 %' if measured < CONVENTION_GAIN_U else ''}" if measured is not None
+           else "convention (fewer than 2 chirp rounds per axis)")
+    return {"k_hi": 1.0 + u, "k_lo": 1.0 / (1.0 + 1.25 * u), "dT": 0.0003, "source": src,
+            "round_gain_spread": None if measured is None else round(measured, 3)}

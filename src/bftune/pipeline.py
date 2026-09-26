@@ -80,18 +80,27 @@ def sanity_warnings(fl: Flight, idn: Identification | None) -> list[str]:
         if gaps.sum() > 0:
             w.append(f"{int(gaps.sum())} time gap(s) in the log (missing frames, {float(dt[gaps].sum()):.2f} s in total): "
                      "the logging device may not keep up with this rate; spectra near gaps are less reliable")
-    hi = np.any(fl.motor_raw >= 2046, axis=1) if fl.motor_raw.size else np.zeros(fl.n, bool)
-    part = float(np.mean(hi & (fl.throttle < 0.75)))
+    from .analysis.profile import hover
+    from .flight import motor_saturated
+
+    thr_h, hz_h = hover(fl)
+    part_thr = thr_h + 0.6 * (1 - thr_h)
+    part = float(np.mean(motor_saturated(fl) & (fl.throttle < part_thr)))
     if part > 0.01:  # at full throttle (punch-outs) saturation is normal
-        w.append(f"a motor is at 100% for {100*part:.1f}% of the log below 75% throttle (authority limit): "
-                 "check props/weight, P/D/FF, motor_output_limit")
+        w.append(f"a motor is at its maximum for {100*part:.1f}% of the log below {100*part_thr:.0f}% throttle (authority "
+                 "limit): check props/weight, P/D/FF, motor_output_limit")
+    if "motor_poles" not in fl.cfg.values:
+        w.append("motor_poles is not in the log or dump (assumed 14): every motor frequency, RPM notch and idle case "
+                 "depends on it - ask the pilot or take it from a `diff all`")
     if idn is not None:
         chirp = getattr(idn, "source", "chirp") == "chirp"
         for a, ai in idn.axes.items():
             if not ai.chain.passed:
                 w.append(f"{AXES[a]}: filter-chain check failed — the firmware model may not match this firmware")
-            if chirp and ai.coherent_to_hz < 25:
-                w.append(f"{AXES[a]}: coherent band only up to {ai.coherent_to_hz:.0f} Hz — use more chirp amplitude")
+            need = 0.14 * hz_h if hz_h else 25.0  # ~25 Hz on a 5": the band must reach past the crossover
+            if chirp and ai.coherent_to_hz < need:
+                w.append(f"{AXES[a]}: coherent band only up to {ai.coherent_to_hz:.0f} Hz (this quad's control band "
+                         f"needs ~{need:.0f} Hz) - use more chirp amplitude or calmer air")
         if not chirp:
             w.append("no chirp in this log: plant from stick inputs only (gain ±40 %, delay from priors); the verdict "
                      "becomes relative (no worse than the flown tune). Recommend a chirp flight for the next iteration")
@@ -182,6 +191,15 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
 
     steps = measured_steps(fl)  # stick lag as flown: the direct check of the model's stick-lag prediction
     an.extra["measured_step"] = {ax: step_summary(r) for ax, r in steps.items()}
+    from .analysis.profile import flight_profile
+
+    an.extra["bftune"] = __version__
+    an.extra["profile"] = flight_profile(fl)  # how this quad is flown: scales for cases, step tests, diagnostics
+    from .analysis.logstep import step_windows
+
+    # the pilot's own setpoint and the estimator windows: the workbench replays them through any candidate tune
+    an.extra["replay"] = {"fs": float(fl.fs), "setpoint": fl.setpoint[:, :3].astype(np.float32),
+                          "starts": {a: step_windows(fl, a) for a in range(3)}}
     for pth in safe_logs or []:
         an.safe.append((f"safe:{Path(pth).name}", safe_tune_from_log(pth)))
     for pth in safe_cli or []:
@@ -243,13 +261,13 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     return an
 
 
-def model_steps(out: Path, fl: Flight) -> dict:
+def model_steps(out: Path, fl: Flight | None = None) -> dict:
     """The model's step response for the flown tune per axis, through the same estimator as the measured one."""
     try:
         from .workbench import Workbench
 
         wb = Workbench(Path(out))
-        res = {AXES[a]: wb.model_step(wb.logged, a, fl) for a in wb.idn.axes}
+        res = {AXES[a]: wb.model_step(wb.logged, a) for a in wb.idn.axes}
         return {k: v for k, v in res.items() if v is not None}
     except Exception:  # noqa: BLE001 - a figure must not break the analysis
         return {}
@@ -326,7 +344,8 @@ def optimize(out: Path, style: str | None = None, passes: int = 2, maxiter: int 
         if str(old.values.get(k)) != str(new.values[k]):
             reasons[k] = ("global search: robust loop optimization" if k.startswith(("p_", "i_", "d_"))
                           else "global search: best disturbance rejection within the noise budget")
-    for d in rules.tune_feedforward(src, an.idn, new, style) + rules.judgement(src, an.idn, new, style):
+    for d in (rules.tune_feedforward(src, an.idn, new, style, overshoot_max=goals.ff_overshoot_flick)
+              + rules.judgement(src, an.idn, new, style)):
         new.values[d.key] = d.value
         reasons[d.key] = d.reason
     return wb.emit(new, reasons, extra={"search": {n: {"score": r.score, "history": r.history} for n, r in allr.items()},

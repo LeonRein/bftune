@@ -33,7 +33,18 @@ from ..model.controller import OperatingPoint, controller_fr
 from ..model.params import Tune
 from ..sysid.chirp import find_chirps
 
-MOTION_HZ = 70.0  # flight motion lives below this; noise estimated above it
+MOTION_HZ = 70.0  # fallback: flight motion lives below this, noise above it (a 5"; see motion_hz_for)
+
+
+def motion_hz_for(fl: Flight) -> float:
+    """Boundary between flight motion and noise for this quad: 0.4 x the hover motor frequency (70 Hz on a 5" at
+    ~175 Hz; a whoop's control band reaches far higher, a 10"'s ends far lower), within the log's usable band."""
+    from ..analysis.profile import hover
+
+    _, hz = hover(fl)
+    if not hz:
+        return MOTION_HZ
+    return float(np.clip(0.4 * hz, 30.0, 0.35 * fl.fs))
 
 
 @dataclass
@@ -63,6 +74,7 @@ class NoiseModel:
     dt: float
     time_scale: float
     notes: list[str] = field(default_factory=list)
+    motion_hz: float = MOTION_HZ  # noise is everything above this (set per quad by build)
 
     def true_psd(self, band: BandNoise, axis: int, f: np.ndarray) -> np.ndarray:
         """Modelled one-sided PSD of the broadband gyro noise at the loop rate, (deg/s)^2/Hz."""
@@ -79,16 +91,17 @@ def _welch_windows(x: np.ndarray, idx_starts: np.ndarray, n: int) -> np.ndarray:
     return (np.abs(X) ** 2).mean(axis=0) / (np.sum(w**2))  # PSD per bin (scaled below)
 
 
-def _hf_var(f: np.ndarray, psd_bin: np.ndarray, fs: float) -> float:
-    """Variance above MOTION_HZ, rescaled to the full [0, fN] band (aliased noise is ~white)."""
+def _hf_var(f: np.ndarray, psd_bin: np.ndarray, fs: float, motion_hz: float = MOTION_HZ) -> float:
+    """Variance above motion_hz, rescaled to the full [0, fN] band (aliased noise is ~white)."""
     fN = fs / 2
-    m = f >= MOTION_HZ
+    m = f >= motion_hz
     df = f[1] - f[0]
     v_band = np.sum(psd_bin[m]) * df
-    return float(v_band * fN / (fN - MOTION_HZ))
+    return float(v_band * fN / (fN - motion_hz))
 
 
-def measure(fl: Flight, n: int = 256, n_bands: int = 5, min_windows: int = 12) -> list[BandNoise]:
+def measure(fl: Flight, n: int = 256, n_bands: int = 5, min_windows: int = 12,
+            motion_hz: float = MOTION_HZ) -> list[BandNoise]:
     """Measure noise spectra per throttle band on armed, non-chirp data."""
     ok = fl.mode(0).copy()
     for r in find_chirps(fl):
@@ -114,7 +127,8 @@ def measure(fl: Flight, n: int = 256, n_bands: int = 5, min_windows: int = 12) -
         pd = np.stack([_welch_windows(fl.D[:, a], sel, n) for a in range(3)]) * scale
         idx = np.concatenate([np.arange(s, s + n) for s in sel])
         mhz = np.median(fl.motor_hz[idx], axis=0).tolist() if fl.motor_hz is not None else [0.0] * 4
-        line_free = _line_free_mask(f, fl.fs, fl.motor_hz[idx] if fl.motor_hz is not None else None)
+        line_free = _line_free_mask(f, fl.fs, fl.motor_hz[idx] if fl.motor_hz is not None else None,
+                                    motion_hz=motion_hz)
         mh_samples = None
         if fl.motor_hz is not None:
             rng = np.random.default_rng(0)
@@ -128,9 +142,9 @@ def measure(fl: Flight, n: int = 256, n_bands: int = 5, min_windows: int = 12) -
                 psd_unfilt=pu,
                 psd_filt=pf,
                 psd_d=pd,
-                var_unfilt=np.array([_hf_var(f, pu[a], fl.fs) for a in range(3)]),
-                var_filt=np.array([_hf_var(f, pf[a], fl.fs) for a in range(3)]),
-                var_d=np.array([_hf_var(f, pd[a], fl.fs) for a in range(3)]),
+                var_unfilt=np.array([_hf_var(f, pu[a], fl.fs, motion_hz) for a in range(3)]),
+                var_filt=np.array([_hf_var(f, pf[a], fl.fs, motion_hz) for a in range(3)]),
+                var_d=np.array([_hf_var(f, pd[a], fl.fs, motion_hz) for a in range(3)]),
                 line_free=line_free,
                 motor_hz_samples=mh_samples,
             )
@@ -139,7 +153,7 @@ def measure(fl: Flight, n: int = 256, n_bands: int = 5, min_windows: int = 12) -
 
 
 def _line_free_mask(f: np.ndarray, fs: float, motor_hz: np.ndarray | None, harmonics: int = 3,
-                    guard_hz: float = 6.0, min_bins: int = 12) -> np.ndarray:
+                    guard_hz: float = 6.0, min_bins: int = 12, motion_hz: float = MOTION_HZ) -> np.ndarray:
     """Bins of the aliased log spectrum not hit by motor harmonics (incl. aliases).
 
     Uses the 10-90 % motor-speed range; drops the highest harmonics first if the mask
@@ -155,7 +169,7 @@ def _line_free_mask(f: np.ndarray, fs: float, motor_hz: np.ndarray | None, harmo
             for fm in np.linspace(h * lo, h * hi, 60):
                 fa = abs(((fm + fs / 2) % fs) - fs / 2)
                 ok &= np.abs(f - fa) > guard_hz
-        if np.sum(ok & (f >= MOTION_HZ)) >= min_bins:
+        if np.sum(ok & (f >= motion_hz)) >= min_bins:
             return ok
     return ok_all
 
@@ -191,21 +205,23 @@ def chain_power(nm_or_dt, tune: Tune, axis: int, band: BandNoise, f: np.ndarray,
 
 
 def build(fl: Flight, tune: Tune, time_scale: float = 1.0, n_bands: int = 5, smooth: float = 0.3) -> NoiseModel:
-    bands = measure(fl, n_bands=n_bands)
-    nm = NoiseModel(bands=bands, fs_log=fl.fs, loop_hz=fl.loop_hz, dt=1 / fl.loop_hz, time_scale=time_scale)
+    mhz = motion_hz_for(fl)
+    bands = measure(fl, n_bands=n_bands, motion_hz=mhz)
+    nm = NoiseModel(bands=bands, fs_log=fl.fs, loop_hz=fl.loop_hz, dt=1 / fl.loop_hz, time_scale=time_scale,
+                    motion_hz=mhz)
     if not bands:
         nm.notes.append("not enough steady armed data to build a noise model")
         return nm
     f_nyq = 0.5 * fl.loop_hz / time_scale
-    knots = np.geomspace(MOTION_HZ, f_nyq, 12)
-    f = np.linspace(MOTION_HZ, f_nyq, 8000)
+    knots = np.geomspace(mhz, f_nyq, 12)
+    f = np.linspace(mhz, f_nyq, 8000)
     df = f[1] - f[0]
     lk = np.log(knots)
     lf = np.log(f)
     for b in bands:
         b.knots_hz = knots
         b.log_psd = np.zeros((3, len(knots)))
-        m = b.f_obs >= MOTION_HZ
+        m = b.f_obs >= mhz
         for axis in range(3):
             g2, d2, _ = chain_power(nm, tune, axis, b, f, fl.loop_hz, time_scale)
             # gyroUnfilt is dominated by motor lines that the RPM filter removes, so the fit uses
@@ -249,7 +265,8 @@ class NoisePrediction:
     gyro_rms: np.ndarray  # (bands, 3) filtered gyro HF noise RMS
 
 
-def predict(nm: NoiseModel, tune: Tune, f_lo: float = MOTION_HZ) -> NoisePrediction:
+def predict(nm: NoiseModel, tune: Tune, f_lo: float | None = None) -> NoisePrediction:
+    f_lo = getattr(nm, "motion_hz", MOTION_HZ) if f_lo is None else f_lo
     f = np.linspace(f_lo, 0.5 * nm.loop_hz / nm.time_scale, 6000)
     df = f[1] - f[0]
     mot = np.zeros((len(nm.bands), 3))

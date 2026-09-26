@@ -11,8 +11,10 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob, Grep
    `tune.json`, report). Know what was predicted and why each change was made.
 2. **Collect the pilot's report right away,** in your first reply and in one message. Ask only
    for what's missing, and don't run heavy analysis before asking:
-   - motor temperature after a hard pack: cold, cool, slightly warm, warm or hot. **Hot means stop
-     and back off noise first, whatever else.**
+   - motor temperature after a hard pack: cold, cool, slightly warm, warm or hot (the same scale as
+     before, so the calibration table stays comparable). **Hot means: find the cause first**
+     (`diagnose`, `motors`, the spectrogram; `bftune:filters-noise`), and back off noise before
+     anything else.
    - did it get better on the priorities in `quad.md`? What stood out: stick feel, propwash,
      punch-outs, bounce-back, anything new?
    - **what the next iteration should prioritise** (the same ranking as before, or a new one), or
@@ -26,24 +28,34 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob, Grep
    - `bftune logs PREVIOUS_LOG NEW_LOG -o <dir>/tunes/NN-date/compare` compares the flights in one
      report (`logs.html`): settings that differ, findings, measured step response (stick lag and
      overshoot as flown), tracking-error spectrum, spectrograms and how hard each flight was flown.
-     Open the PNGs and look. Only large differences (> 3 dB, clearly different findings, a few ms of
-     lag) count, because flying styles differ between flights; `bftune errspec --by-throttle` splits
-     by throttle when the flights differ.
-   - The measured stick lag is the direct check of the model's stick-lag prediction in the worklog.
+     Open the PNGs and look. A difference counts only if it is larger than the spread between logs
+     of the *same* tune (fly two packs, or compare the measured step's confidence) and the flights
+     were flown alike ("how hard it was flown"); `bftune errspec --by-throttle` splits by throttle
+     when they differ. Crashes: `--exclude`.
+   - The measured step of the new log is the direct check of the as-flown prediction in the worklog
+     (`analyze` puts both in `analysis.html` and `brief`).
    - `bftune analyze NEW_LOG --dump NEW_DUMP -o <dir>/analysis/NN --safe-log ...`: if the motors
-     stayed cool, the flown tune becomes a new proven-safe reference (`--safe-log` for the next
-     analysis, or `bftune safe -o A --log NEW_LOG`).
-   - If it contains chirps, compare the identified plant with the previous one. Gains should agree
-     within about 10 % after the thrust_linear correction. A larger change means something changed
-     on the quad (props, motors, battery, weight): ask.
+     stayed cold, cool or slightly warm, the flown tune becomes a new noise reference (`--safe-log`
+     for the next analysis, or `bftune safe -o A --log NEW_LOG`). Add a row to the noise-vs-temperature
+     table in `quad.md` either way.
+   - If it contains chirps, compare the identified plant with the previous one after the
+     thrust_linear correction. The gain spread between chirp rounds (`uncertainty.source`) is the
+     yardstick: a change well beyond it means something changed on the quad (props, motors, battery,
+     weight): ask.
 4. **Check the predictions.** For each change, compare what the worklog predicted with what the
    pilot and the data say (`bftune:evidence`):
    - They agree: the model is calibrated for this quad. You can move further in the same direction if
      the pilot wants more.
    - They disagree: find out why before changing anything else. Possible causes: a nonlinear effect
      (saturation, airmode, I-term), a metric that misses what the pilot feels, a changed quad, or a
-     wrong noise or heat assumption. Note the lesson in `quad.md` under constraints, e.g. "Ms above
-     2.4 at 40-50 Hz is felt as propwash on this quad".
+     wrong noise or heat assumption. Note the lesson in `quad.md` (calibration), e.g. "Ms above
+     2.4 at 40-50 Hz is felt as propwash on this quad", and whether the pilot noticed each change:
+     that is their perceptibility threshold for the stop rule.
+   **No new log** (the pilot is happy and wants more, or reports only feel): work from the last
+   analysis (re-run `analyze` on the last log if `brief` says STALE ANALYSIS) and the pilot's words.
+   If the tune sits at the noise budget with cold motors, the next step is the noise-headroom flight
+   (`bftune:filters-noise`); otherwise the `bftune:tune` loop on the last model. Ask for a log of the
+   next flight either way: it is the check of whatever you deliver.
 5. **Decide the next step** with the `bftune:tune` loop (hypothesize → experiment → decide → verify).
    Change fewer things per iteration when the pilot is fine-tuning feel, and more when there is a clear
    diagnosed problem.

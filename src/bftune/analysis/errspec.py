@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..flight import AXES, Flight
+from ..flight import AXES, Flight, motor_saturated
 from ..sysid.validate import freestyle_windows
 
 BANDS = ((2, 5), (5, 10), (10, 20), (20, 30), (30, 45), (45, 60), (60, 100), (100, 200))
@@ -33,7 +33,7 @@ def error_spectrum(fl: Flight, n: int = 512, throttle: tuple[float, float] | Non
     out = {"windows": len(acc[0]), "bands": [f"{lo}-{hi}" for lo, hi in BANDS], "axes": {}}
     if used:
         idx = np.concatenate([np.arange(s, s + n) for s in used])
-        hi = np.any(fl.motor_raw[idx] >= 2046, axis=1) if fl.motor_raw.size else np.zeros(len(idx), bool)
+        hi = motor_saturated(fl)[idx]
         out["activity"] = {"stick_rms_deg_s": [round(float(np.sqrt(np.mean(fl.setpoint[idx, a] ** 2))), 0) for a in range(3)],
                            "throttle_p25_p50_p75": [round(float(x), 2) for x in np.percentile(fl.throttle[idx], [25, 50, 75])],
                            "motor_saturation_pct": round(float(100 * hi.mean()), 2)}

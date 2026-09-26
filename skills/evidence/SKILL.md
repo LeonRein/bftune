@@ -21,26 +21,33 @@ estimator (`analysis.html`, `brief` → `measured_step_as_flown` / `model_step_f
 overlays both). Estimator bias cancels, so:
 - **timing** (50 % time) should agree within the measurement's spread (a few tenths of a ms to
   ~1 ms with `good` confidence). A clear gap means the model misses delay, motor lag or RC/FF
-  behaviour: find out before trusting predicted lag changes;
+  behaviour: find out before trusting predicted lag changes. With `fair`/`low` confidence (few
+  stick moves, e.g. a mostly-chirp log) the comparison is weak: look at the overlay in
+  `analysis.html` and prefer a log with more freestyle;
 - **peak and dip** are where the model is weakest (FF jitter reduction and rate limits, I-term relax
-  and other nonlinearities are simplified). If the model's peak is higher than measured (seen on a
-  5": 37-42 % vs 20-25 %), treat model FF overshoot as conservative on this quad and calibrate the
-  FF overshoot targets on the *measured* peaks the pilot liked; if lower, the opposite;
+  and other nonlinearities are simplified). If the model's peak differs from the measured one (seen
+  on a 5": 37-42 % modelled vs 20-25 % measured), keep `peak_max` on the model's scale (its default,
+  the flown tune's modelled peak, does that) and read the model's *changes* in peak, not its
+  absolute value;
 - after a new tune flies, compare measured vs predicted again: that is the model's report card.
 
 ## Is the model trustworthy? (read `brief.json` → `identification`, `warnings`)
-1. `source`:
-   - `chirp`: precise. Gain within about ±10 %; the gate is absolute (design margins).
-   - `freestyle`: gain within about ±40 %, delay from priors. The gate is **relative**: no worse
-     than the flown tune. Make only small, diagnosis-driven changes and plan a chirp flight.
+1. `source` and `uncertainty`:
+   - `chirp`: precise. The robust variants come from the gain spread between the chirp rounds
+     (`uncertainty.source`, never below ±10 %); the gate is absolute (design margins). A large
+     spread means the rounds disagree (gusts, a changing battery, a loose part): look before trusting.
+   - `freestyle`: gain within about ±40 % *(from synthetic twins)*, delay from priors. The gate is
+     **relative**: no worse than the flown tune. Make only small, diagnosis-driven changes and plan a
+     chirp flight.
 2. `chain_check_passed` on every axis (`null` = could not be checked, as in freestyle mode with
    too narrow a stick band; that is not a failure, but it is also no confirmation). It shows the firmware model matches this firmware and
    config. If it fails, stop.
-3. `validation.closed_loop` < 1 dB / 8° rms (chirp only), and `validation.replay` roll/pitch fit
-   > 60 % (yaw is lower).
-   - A replay fit of 50-60 % is a caution: note it and keep more margin.
-   - Below 50 %, or a closed-loop error above 2 dB, means stop and look for the cause: saturation,
-     wrong session, or angle mode.
+3. `validation.closed_loop` (chirp only) and `validation.replay` (the model replaying the freestyle
+   part of the log). Starting points *(convention, from rigid 3.5"/5" frames)*: closed loop below
+   about 1 dB / 8° rms, roll/pitch replay fit above about 60 % (yaw is lower). Judge them against
+   what this quad's other logs reach: a fit that drops from 85 % to 50 % between logs of the same
+   quad says more than either number. Far below, look for the cause before tuning: saturation, the
+   wrong session, a crash in the window (`--exclude`), or angle-mode flying in the replayed part.
 4. Parameters within the craft class (`bftune:craft-classes`).
 5. `coherent_to_hz`: the band where the plant was measured. If the crossover or the Ms peak lies
    beyond it, `assess` says so, and those numbers rely on the model's extrapolation. Be more
@@ -51,13 +58,14 @@ overlays both). Estimator bias cancels, so:
 ## Calibrating the model against the pilot
 Every tune the pilot flew *and* described is a calibration point. Assess it on the same model
 (`bftune assess -o A flown.txt --with-current`, or `--safe-log`/`--safe-cli` at analysis time) and
-line up its metrics with what they felt. What we learned on the reference 3.5":
+line up its metrics with what they felt. Write the table into `quad.md` (tune, key metrics, what the
+pilot said): it is this quad's calibration and the basis of its design targets. What one pilot's 3.5"
+showed *(seen on …, a single quad)*:
 - A hover Ms of 3.3-3.6 at 46-48 Hz felt worse for propwash than Ms 1.7, even though that tune had a
-  *higher* idle crossover. Weight the hover/mid Ms and its frequency more than raw crossover.
-- A `resonance_*` finding at the same frequency as the model's Ms peak confirms the model (two
+  *higher* idle crossover: the hover/mid Ms and its frequency mattered more than raw crossover.
+- A `resonance_*` finding at the same frequency as the model's Ms peak confirmed the model (two
   independent sources).
-- Motor temperature tracks the predicted D-term noise at the motors. The model predicted the hot
-  tune's D noise within about 15 %.
+- Motor temperature tracked the predicted D-term noise at the motors (within about 15 %).
 
 When the model and the pilot disagree:
 1. Check that it's the same metric. The pilot may feel idle behaviour while you look at hover.

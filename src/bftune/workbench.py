@@ -122,7 +122,12 @@ class Workbench:
         self.src = self.an.summary
         self.idn = self.an.idn
         self.targets = load_targets(self.out)
-        self.goals, self.target_sources = build_goals(self.style, None, self.targets.get("overrides"), self.noise_budget)
+        self.profile = (getattr(self.an, "extra", None) or {}).get("profile") or {}
+        unc = dict(getattr(self.idn, "uncertainty", None) or {"k_hi": 1.10, "k_lo": 0.88, "dT": 0.0003})
+        unc.setdefault("source", "convention")
+        self._unc = unc
+        self.goals, self.target_sources = build_goals(self.style, None, self.targets.get("overrides"), self.noise_budget,
+                                                      self.profile, unc, self.an.tune)
         self.style = self.goals.style
         safe = [t for _, t in self.an.safe]
         self.noise_ref = reference_noise(self.an.nm, [self.an.tune] + safe, self.src.loop_hz, self.idn) if self.an.nm.bands else None
@@ -134,7 +139,59 @@ class Workbench:
         self.flown_hover_fc = float(np.mean(fcs)) if fcs else None
         if self.flown_hover_fc:
             self.goals, self.target_sources = build_goals(self.style, self.flown_hover_fc,
-                                                          self.targets.get("overrides"), self.noise_budget)
+                                                          self.targets.get("overrides"), self.noise_budget,
+                                                          self.profile, self._unc, self.an.tune)
+
+    @property
+    def stale(self) -> str | None:
+        """A warning when the analysis was built by an older bftune (missing measurements, other defaults)."""
+        from . import __version__
+
+        built = (getattr(self.an, "extra", None) or {}).get("bftune")
+        if built and built.split(".")[:2] == __version__.split(".")[:2]:
+            return None
+        return (f"this analysis was built by bftune {built or 'older than 0.8'} (now {__version__}): re-run `bftune analyze` "
+                "for the flight profile, the as-flown step and the data-derived targets; defaults may have changed")
+
+    # ----------------------------------------------------------------- the pilot's inputs
+    @property
+    def rx_hz(self) -> float:
+        """RC link rate: log header, else estimated from the log (profile), else the 250 Hz convention."""
+        from .optimize.rules import rx_rate_hz
+
+        v = self.src.header_int("rc_smoothing_rx_smoothed", 0)
+        return float(v) if v > 0 else float(self.profile.get("rx_rate_hz") or rx_rate_hz(self.src))
+
+    def stimuli(self, axis: int) -> dict:
+        """The stick moves the step tests use: this pilot's own typical ("flick") and fast ("snap") moves measured in
+        the log, else conventions (300 deg/s in 50 ms; 0.6 x max rate in 30 ms)."""
+        from .analysis.profile import CONVENTION_FLICK, CONVENTION_SNAP_RAMP_MS
+        from .optimize.rules import max_rate
+
+        m = (self.profile.get("stick_moves") or {}).get(AXES[axis])
+        if m:
+            return {"flick": (float(m["flick"]["deg_s"]), m["flick"]["ramp_ms"] / 1000.0),
+                    "snap": (float(m["snap"]["deg_s"]), m["snap"]["ramp_ms"] / 1000.0),
+                    "source": f"this pilot's stick moves in the log ({m['moves']} moves)"}
+        return {"flick": (CONVENTION_FLICK["deg_s"], CONVENTION_FLICK["ramp_ms"] / 1000.0),
+                "snap": (min(600.0, 0.6 * max_rate(self.src, axis)), CONVENTION_SNAP_RAMP_MS / 1000.0),
+                "source": "convention (no stick moves measured)"}
+
+    @property
+    def peak_max(self) -> dict:
+        """As-flown step peak target per axis [%]: the agent's override, else the flown tune's own peak (the model's
+        replay of it, so model and target share the model's bias)."""
+        if self.goals.peak_max is not None:
+            return {AXES[a]: float(v) for a, v in enumerate(self.goals.peak_max)}
+        if not hasattr(self, "_flown_peak"):
+            self._flown_peak = {}
+            for a in self.idn.axes:
+                r = self.model_step(self.logged, a)
+                if r is not None:
+                    self._flown_peak[AXES[a]] = round(float(r["overshoot_pct"]), 1)
+            if self._flown_peak and self.target_sources.get("peak_max") in (None, "convention"):
+                self.target_sources["peak_max"] = "from the flown tune (as-flown peak)"
+        return self._flown_peak
 
     # ----------------------------------------------------------------- tunes
     @property
@@ -191,7 +248,6 @@ class Workbench:
 
     def step_metrics(self, tune: Tune, axis: int) -> dict:
         from .analysis.loop import step_metrics, step_response
-        from .optimize.rules import max_rate, rx_rate_hz
 
         ai = self.idn.axes[axis]
         # during a stick move D rises toward d_max only if a D-max driver is enabled (pid.c)
@@ -199,38 +255,48 @@ class Workbench:
         op = OperatingPoint(throttle=ai.op.throttle, motor_hz=ai.op.motor_hz, vbat=ai.op.vbat, d_boost=boost,
                             dyn_notch_hz=ai.op.dyn_notch_hz)
         pl = self._plant_for(axis, tune)
-        rx = rx_rate_hz(self.src)
+        rx = self.rx_hz
+        st = self.stimuli(axis)
         out = {}
-        for name, amp, ramp in (("flick", 300.0, 0.05), ("snap", min(600.0, 0.6 * max_rate(self.src, axis)), 0.03)):
+        for name in ("flick", "snap"):
+            amp, ramp = st[name]
             m = step_metrics(step_response(tune, axis, pl, op, self.idn.dt, self.src.loop_hz, rx, amplitude=amp,
-                                           ramp_s=ramp, time_scale=self.idn.time_scale))
+                                           ramp_s=ramp, duration=max(0.5, ramp + 0.3), time_scale=self.idn.time_scale))
             out[name] = {k: round(float(m[k]), 2) for k in ("tracking_lag_ms", "stick_lag_ms", "overshoot_pct", "undershoot_pct",
                                                             "settle_5pct_ms")}
+        r = self.model_step(tune, axis)
+        if r is not None:
+            out["as_flown"] = {"delay_50_ms": round(r["delay_50_ms"], 2), "peak_pct": round(r["overshoot_pct"], 1),
+                               "dip_pct": round(r["undershoot_pct"], 1)}
         return out
 
-    def model_step(self, tune: Tune, axis: int, fl) -> dict | None:
-        """The model's answer to the measured step response: the model (at the hover operating point) replays the
-        logged setpoint - which Betaflight records after RC smoothing (blackbox.c: pidGetPreviousSetpoint) - through
-        FF and the loop, and the same windows and Wiener estimator as `bftune logs` turn it into a step. Estimator
-        bias cancels, so the two can be compared directly (analysis.logstep)."""
-        from .analysis.logstep import log_step_response
+    def model_step(self, tune: Tune, axis: int) -> dict | None:
+        """The step response "as flown" for any tune: the model (at the hover operating point) replays the pilot's
+        logged setpoint - recorded after RC smoothing (blackbox.c: pidGetPreviousSetpoint) - through FF and the loop,
+        and the same windows and Wiener estimator as the measurement turn it into a step. For the flown tune it
+        is directly comparable with the measured step (estimator bias cancels); for a candidate it predicts what
+        the next log will show, with the pilot's real stick moves (analysis.logstep)."""
+        from .analysis.logstep import step_estimate
         from .analysis.loop import reference_fr
-        from .optimize.rules import rx_rate_hz
 
+        rp = (getattr(self.an, "extra", None) or {}).get("replay")
+        if not rp or not rp["starts"].get(axis):
+            return None
         ai = self.idn.axes[axis]
         boost = 1.0 if (tune.i("d_max_gain") > 0 or tune.i("d_max_advance") > 0) else 0.0
         op = OperatingPoint(throttle=ai.op.throttle, motor_hz=ai.op.motor_hz, vbat=ai.op.vbat, d_boost=boost,
                             dyn_notch_hz=ai.op.dyn_notch_hz)
-        f = np.fft.rfftfreq(fl.n, 1.0 / fl.fs)
+        sp = np.asarray(rp["setpoint"][:, axis], dtype=float)
+        n = len(sp)
+        f = np.fft.rfftfreq(n, 1.0 / rp["fs"])
         f[0] = 1e-6
         T, H_sp, _ = reference_fr(tune, axis, self._plant_for(axis, tune), op, f, self.idn.dt, self.src.loop_hz,
-                                  rx_rate_hz(self.src), self.idn.time_scale)
-        sp = fl.setpoint[:, axis]
-        y = np.fft.irfft(T / H_sp * np.fft.rfft(sp - sp.mean()), fl.n) + sp.mean()
-        return log_step_response(fl, axis, gyro=y)
+                                  self.rx_hz, self.idn.time_scale)
+        y = np.fft.irfft(T / H_sp * np.fft.rfft(sp - sp.mean()), n) + sp.mean()
+        return step_estimate(sp, y, rp["starts"][axis], rp["fs"])
 
-    def axis_problem(self, tune: Tune, axis: int, relax_idle: bool = True) -> AxisProblem:
-        cases = build_cases(self.src, self.idn, tune, axis, self.goals)
+    def axis_problem(self, tune: Tune, axis: int, relax_idle: bool = True, search: bool = False) -> AxisProblem:
+        cases = build_cases(self.src, self.idn, tune, axis, self.goals, search=search)
         if relax_idle:
             self._relax_idle_cases(axis, cases)
         prob = AxisProblem(tune, axis, cases, self.idn, self.src.loop_hz, self.an.nm, self.goals,
@@ -364,9 +430,10 @@ class Workbench:
         idle = max(self.src.idle_hz(10), floor)
         rmin = tune.i("rpm_filter_min_hz")
         if tune.i("rpm_filter_harmonics") > 0 and tune.s("dshot_bidir") != "OFF" and rmin > 0.95 * idle:
-            out.append(f"rpm_filter_min_hz {rmin} is above the idle motor frequency (~{idle:.0f} Hz"
-                       + (f", dyn idle floor {floor:.0f} Hz" if floor > self.src.idle_hz(10) else "")
-                       + "): the motor fundamental at low throttle is not notched. It can show up as a low-throttle "
+            out.append(f"rpm_filter_min_hz {rmin} is not below the lowest idle motor frequency with margin (idle p10 "
+                       f"~{idle:.0f} Hz" + (" = the dyn idle floor" if floor > self.src.idle_hz(10) else "")
+                       + f"; the check is min_hz > 0.95 x idle = {0.95 * idle:.0f} Hz): the motor fundamental at the lowest "
+                       "speeds is not notched. It can show up as a low-throttle "
                        f"error peak near {idle:.0f} Hz. If `diagnose` shows a motor line there, lower rpm_filter_min_hz to "
                        f"~{max(50, int(idle * 0.9 / 5) * 5)} (a notch near the idle crossover costs ~1 deg of idle PM: check "
                        "with `sweep`). If it shows body motion, leave it.")
@@ -405,12 +472,22 @@ class Workbench:
                 notes.append(f"{ax}: hover crossover {fc:.0f} Hz is close to the end of the identified band "
                              f"({e['coherent_to_hz']:.0f} Hz): margins rely on the model extrapolation")
         notes += self.lint(tune)
+        if steps:
+            pk = self.peak_max
+            for ax, e in per.items():
+                af = e.get("step", {}).get("as_flown")
+                lim = pk.get(ax)
+                if af and lim is not None and af["peak_pct"] > lim + 1.0:
+                    notes.append(f"{ax}: as-flown step peak +{af['peak_pct']:.0f} % is above the target +{lim:.0f} % "
+                                 f"({self.target_sources.get('peak_max')}): more overshoot than the pilot flew with")
         relaxed = [ax for ax, e in per.items() if e.get("idle_limits_from_flown")]
         if relaxed:
             notes.append(f"idle limits on {', '.join(relaxed)} = the flown tune's idle margins (it flies, but misses the design "
                          "limits there; at very low rpm the model is least certain). Judge idle by improvement.")
         problems = validate(tune, [k for k in changed_keys(self.logged, tune) if k in tuning_keys()])
         verdict = "PASS" if not any(e["violations"] for e in per.values()) and not problems else "FAIL"
+        if self.stale:
+            notes.insert(0, self.stale)
         if self.relative_gate:
             notes.insert(0, "NO CHIRP: plant gain uncertain (±40 %). Verdict = no worse than the flown tune in every "
                             "failing case (relative gate), not the absolute design margins. Keep changes small; fly a chirp.")
@@ -433,17 +510,18 @@ class Workbench:
             rows.append({"value": v, "verdict": r["verdict"], **{ax: e for ax, e in r["axes"].items()}})
         return rows
 
-    def grid(self, base: Tune, k1: str, v1: list, k2: str, v2: list) -> dict:
+    def grid(self, base: Tune, k1: str, v1: list, k2: str, v2: list, steps: bool = False) -> dict:
         axes = sorted({a for a, ax in enumerate(AXES) for k in (k1, k2) if k.endswith(f"_{ax}")}) or None
         cells = []
         for a in v1:
             for b in v2:
                 t = apply_setting(apply_setting(base.copy(), k1, a), k2, b)
-                r = self.assess(t, steps=False, axes=axes)
+                r = self.assess(t, steps=steps, axes=axes)
                 cells.append({k1: a, k2: b, "verdict": r["verdict"],
                               "axes": {ax: {"ok": not e["violations"], "hover_ms": e["hover"]["ms"],
                                             "hover_fc": e["hover"]["fc"], "worst_pm": e["worst"]["pm"],
                                             "noise": e["noise_vs_safe"], "obj": e["objective_db"],
+                                            "as_flown": e.get("step", {}).get("as_flown"),
                                             "first_violation": (e["violations"] or [None])[0]}
                                        for ax, e in r["axes"].items()}})
         return {"keys": [k1, k2], "values": [v1, v2], "cells": cells}
@@ -454,7 +532,7 @@ class Workbench:
 
         out = {}
         for a in axes:
-            prob = self.axis_problem(base, a)
+            prob = self.axis_problem(base, a, search=True)
             if self.relative_gate:  # no chirp: stay close to the flown gains (skills: about ±15 %)
                 prob.goals = replace(prob.goals, gain_range=(0.85, 1.15))
             if prob.noise_Q is not None and self.noise_ref:
@@ -465,10 +543,12 @@ class Workbench:
             t = base.copy().set(f"p_{ax}", r.p).set(f"i_{ax}", r.i).set(f"d_{ax}", r.d).set(f"d_max_{ax}", r.d_max)
             chk = self.assess_axis(t, a, steps=True)
             r.feasible = not chk["violations"]
-            lag0 = self.step_metrics(base, a)["flick"]["stick_lag_ms"]
+            s0 = self.step_metrics(base, a)
+            af0, af1 = s0.get("as_flown"), chk.get("step", {}).get("as_flown")
             out[AXES[a]] = {"p": r.p, "i": r.i, "d": r.d, "d_max": r.d_max, "feasible": r.feasible,
                             "violations": chk["violations"][:3],
-                            "stick_lag_ms": [lag0, chk["step"]["flick"]["stick_lag_ms"]] if "step" in chk else None,
+                            "as_flown_50_ms": [af0["delay_50_ms"], af1["delay_50_ms"]] if af0 and af1 else None,
+                            "as_flown_peak_pct": [af0["peak_pct"], af1["peak_pct"]] if af0 and af1 else None,
                             "noise_vs_safe": round(float(r.noise_ratio), 3), "worst": {k: round(float(v), 2) for k, v in r.worst.items()},
                             **({} if r.feasible else {"note": "does not pass every case; least-violating point found"}),
                             **({"range": "±15 % of the flown P/D (no chirp)"} if self.relative_gate else {})}
@@ -495,7 +575,7 @@ class Workbench:
             lf = b.line_free if b.line_free is not None else np.ones_like(f, bool)
             for a in range(3):
                 p = b.psd_unfilt[a]
-                m = lf & (f > 70)
+                m = lf & (f > getattr(nm, "motion_hz", 70.0))
                 if m.sum() < 5:
                     continue
                 floor = np.median(p[m])
@@ -529,10 +609,9 @@ class Workbench:
 
     # ----------------------------------------------------------------- deliverable
     def emit(self, tune: Tune, reasons: dict[str, str] | None = None, extra: dict | None = None, log=print,
-             dest: Path | None = None, profile: int | None = None) -> dict:
+             dest: Path | None = None, profile: int | None = None, experiment: str | None = None) -> dict:
         from .emit.cli import cli_block, diff_table
         from .noise.model import predict as predict_noise
-        from .optimize.rules import rx_rate_hz
         from .report import plots as P
         from .report.tune import write_report
 
@@ -545,7 +624,7 @@ class Workbench:
         reasons = dict(reasons or {})
         for k in ("simplified_pids_mode", "simplified_dterm_filter", "simplified_gyro_filter"):
             reasons.setdefault(k, "keep explicit values (Configurator sliders would overwrite them)")
-        ass = {"current": self.assess(self.logged), "new": self.assess(new)}
+        ass = {"logged": self.assess(self.logged), "new": self.assess(new)}
         if old is not self.logged:
             ass["on_quad"] = self.assess(old)
         for name, t in self.an.safe:
@@ -553,6 +632,9 @@ class Workbench:
         verdict = ass["new"]["verdict"]
         viol = {ax: e["violations"] for ax, e in ass["new"]["axes"].items()}
         comment = [f"style: {self.style}; model-predicted margins and noise in report.html"]
+        if experiment:
+            comment.append(f"EXPERIMENT: {experiment}")
+            comment.append("Fly it with the checks in report.html; go back with revert_cli.txt if anything is off.")
         if verdict == "FAIL":
             comment.append("WARNING: the model predicts violated constraints for this tune:")
             comment += [f"  {ax}: {v}" for ax, vs in viol.items() for v in vs] + [f"  {p}" for p in ass["new"]["range_problems"]]
@@ -568,7 +650,8 @@ class Workbench:
         missing = [k for k, _, _, r in diff_table(old, new, reasons) if not r]
         rows = diff_table(old, new, reasons)
         plots = {"loop": P.loop_compare(self.idn, self.src.loop_hz, old, new, dest / "loop_compare.png").name}
-        sp, _ = P.step_compare(self.idn, self.src.loop_hz, rx_rate_hz(self.src), old, new, dest / "step_compare.png")
+        sp, _ = P.step_compare(self.idn, self.src.loop_hz, self.rx_hz, old, new, dest / "step_compare.png",
+                               {a: self.stimuli(a)["flick"] for a in self.idn.axes})
         plots["step"] = sp.name
         if self.an.nm.bands:
             sc = lambda t: np.array([[thrust_linear_slope(t.i("thrust_linear"), b.throttle)] for b in self.an.nm.bands])  # noqa: E731
@@ -580,7 +663,11 @@ class Workbench:
             "changes": [{"setting": k, "old": o, "new": n, "reason": r} for k, o, n, r in rows],
             "unexplained_changes": missing, "assessment": ass, "problems": problems, "plots": plots,
             "goals": {k: v for k, v in asdict(self.goals).items() if isinstance(v, (int, float, tuple, str))},
-            "target_sources": self.target_sources, "target_reasons": self.targets.get("reasons", {}),
+            "target_sources": self.target_sources,
+            # a stored reason belongs to the stored value only (not to a --noise-budget/--style given for this call)
+            "target_reasons": {k: v for k, v in self.targets.get("reasons", {}).items()
+                               if self.target_sources.get(k) == "override"},
+            "experiment": experiment,
             **(extra or {}),
         }
         (dest / "tune.json").write_text(json.dumps(result, indent=1, default=float))
@@ -622,6 +709,10 @@ def format_assessment(ass: dict) -> str:
                 f" ({e.get('worst_case', {}).get('ms', '')}) | noise {nz} | obj {e['objective_db']:.2f} dB")
             if "step" in e:
                 s = e["step"]
+                af = s.get("as_flown")
+                if af:
+                    lines.append(f"        as flown (model replays this pilot's stick inputs): 50 % at {af['delay_50_ms']:.1f} ms, "
+                                 f"peak +{af['peak_pct']:.0f}%, dip -{af['dip_pct']:.0f}%")
                 lines.append(f"        stick→gyro lag: flick {s['flick']['stick_lag_ms']:.1f} ms, snap {s['snap']['stick_lag_ms']:.1f} ms"
                              f" | overshoot flick {s['flick']['overshoot_pct']:.0f}%, snap {s['snap']['overshoot_pct']:.0f}%"
                              f" | settle {s['flick']['settle_5pct_ms']:.0f} ms | (lag vs smoothed setpoint {s['flick']['tracking_lag_ms']:.1f} ms)")
@@ -655,6 +746,9 @@ def format_sweep(key: str, rows: list[dict]) -> str:
             if "step" in e:
                 st = (f" | stick-lag {e['step']['flick']['stick_lag_ms']:.1f} ov {e['step']['flick']['overshoot_pct']:.0f}%"
                       f"/{e['step']['snap']['overshoot_pct']:.0f}%")
+                af = e["step"].get("as_flown")
+                if af:
+                    st += f" | as flown {af['delay_50_ms']:.1f} ms +{af['peak_pct']:.0f}%"
             wc = e.get("worst_case", {}).get("pm", "")
             lines.append(
                 f"{str(r['value']) if first else '':>8s} {r['verdict'] if first else '':7s} {ax:5s} {'ok' if not v else 'FAIL':4s}  "
@@ -682,16 +776,21 @@ def format_grid(res: dict) -> str:
     k1, k2 = res["keys"]
     v1, v2 = res["values"]
     axes = list(res["cells"][0]["axes"]) if res["cells"] else []
-    out = [f"grid {k1} (rows) x {k2} (columns): cell = verdict hoverMs/worstPM noise obj  (per axis)"]
+    steps = any(e.get("as_flown") for c in res["cells"] for e in c["axes"].values())
+    w = 38 if steps else 24
+    out = [f"grid {k1} (rows) x {k2} (columns): cell = verdict hoverMs/worstPM noise obj"
+           + (" | as-flown 50% ms/peak%" if steps else "") + "  (per axis)"]
     for ax in axes:
-        out.append(f"\n[{ax}]  " + "".join(f"{str(b):>24s}" for b in v2))
+        out.append(f"\n[{ax}]  " + "".join(f"{str(b):>{w}s}" for b in v2))
         for a in v1:
             row = f"{str(a):>6s} "
             for b in v2:
                 c = next(c for c in res["cells"] if c[k1] == a and c[k2] == b)
                 e = c["axes"][ax]
                 nz = "-" if e["noise"] is None else f"{e['noise']:.2f}"
-                row += f"{'ok ' if e['ok'] else 'NO '}{_f(e['hover_ms'], '{:.2f}')}/{e['worst_pm']:.0f} {nz} {e['obj']:.2f}".rjust(24)
+                af = e.get("as_flown")
+                st = f" | {af['delay_50_ms']:.1f}/{af['peak_pct']:.0f}" if af else ""
+                row += f"{'ok ' if e['ok'] else 'NO '}{_f(e['hover_ms'], '{:.2f}')}/{e['worst_pm']:.0f} {nz} {e['obj']:.2f}{st}".rjust(w)
             out.append(row)
     why = [(c[k1], c[k2], ax, e["first_violation"]) for c in res["cells"] for ax, e in c["axes"].items() if not e["ok"]]
     if why:
@@ -772,7 +871,7 @@ def brief(wb: Workbench) -> dict:
                      "differs": {k: [an.tune.values.get(k), t.values[k]] for k in changed_keys(an.tune, t) if k in keys},
                      "verdict": ass["verdict"], "axes": {ax: _compact_axis(e) for ax, e in ass["axes"].items()}})
     qa = wb.assess(an.quad_tune, steps=True) if getattr(an, "quad_tune", None) is not None else None
-    summary = [f"model: {ident['source']} identification"
+    summary = ([f"STALE ANALYSIS: {wb.stale}"] if wb.stale else []) + [f"model: {ident['source']} identification"
                + (f", gain uncertainty ±{(ident['uncertainty']['k_hi'] - 1) * 100:.0f} %" if ident.get("uncertainty") else "")
                + (f"; missing axes {ident['missing_axes']}" if ident["missing_axes"] else ""),
                f"logged tune: {cur['verdict']} ({'relative' if wb.relative_gate else 'absolute'} gate)"]
@@ -796,9 +895,17 @@ def brief(wb: Workbench) -> dict:
     if lag_pairs:
         summary.append("step response 50 % time, measured in the log vs model for the flown tune [ms]: " + "; ".join(lag_pairs)
                        + " (compare with the measurement's spread; a clear gap = the model misses something: bftune:evidence)")
+    if wb.profile:
+        st = wb.stimuli(0)
+        summary.append(f"flight profile: hover throttle {wb.profile.get('hover_throttle')}, hover motor "
+                       f"{wb.profile.get('hover_motor_hz')} Hz, mid design case at throttle {wb.goals.mid_throttle}, "
+                       f"roll stick moves {st['flick'][0]:.0f} deg/s in {st['flick'][1] * 1000:.0f} ms typical / "
+                       f"{st['snap'][0]:.0f} in {st['snap'][1] * 1000:.0f} ms fast ({st['source']}), link "
+                       f"{wb.rx_hz:.0f} Hz ({wb.profile.get('rx_rate_source', 'header')})")
     summary += [f"finding [{f['severity']}] {f['summary']}" for f in getattr(an, "diagnosis", []) if f["severity"] != "info"]
     return {
         "summary": summary,
+        "analysis_built_by": (getattr(an, "extra", None) or {}).get("bftune"),
         "bftune": __version__,
         "craft": an.craft, "firmware": an.firmware, "loop_hz": src.loop_hz, "log_rate_hz": src.fs,
         "style": wb.style,
@@ -806,6 +913,7 @@ def brief(wb: Workbench) -> dict:
                     "reasons": wb.targets.get("reasons", {}), "flown_hover_crossover_hz": wb.flown_hover_fc,
                     "safety_floor": SAFETY_FLOOR},
         "identification": ident,
+        "flight_profile": wb.profile or None,  # how this quad is flown: the scales it is judged on
         "flight": {
             "natural_idle_rpm_p20": round(src.idle_hz(20) * 60),
             "hover_motor_hz": round(float(np.mean([np.mean(ai.op.motor_hz) for ai in idn.axes.values()])), 1)

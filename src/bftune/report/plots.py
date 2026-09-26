@@ -72,7 +72,7 @@ def loop_compare(idn, loop_hz: float, old: Tune, new: Tune, path: Path) -> Path:
     fig, axs = plt.subplots(2, 3, figsize=(15, 7), sharex=True)
     for axis in idn.axes:
         op = _cases_for_plot(idn, axis, loop_hz, old)
-        for tune, col, lab in ((old, C_OLD, "current"), (new, C_NEW, "new")):
+        for tune, col, lab in ((old, C_OLD, "on quad"), (new, C_NEW, "new")):
             M, r, _ = evaluate(tune, axis, _plant_for(idn, axis, tune), op, idn.dt, loop_hz, idn.time_scale)
             axs[0, axis].semilogx(r["f"], 20 * np.log10(np.abs(r["S"])), color=col,
                                   label=f"{lab}: Ms {M.ms:.2f}, PM {M.pm:.0f}°, fc {M.fc:.0f} Hz")
@@ -93,23 +93,26 @@ def loop_compare(idn, loop_hz: float, old: Tune, new: Tune, path: Path) -> Path:
     return path
 
 
-def step_compare(idn, loop_hz: float, rx_hz: float, old: Tune, new: Tune, path: Path) -> tuple[Path, dict]:
+def step_compare(idn, loop_hz: float, rx_hz: float, old: Tune, new: Tune, path: Path,
+                 stim: dict | None = None) -> tuple[Path, dict]:
     fig, axs = plt.subplots(1, 3, figsize=(15, 4))
     metrics = {}
     for axis in idn.axes:
         ai = idn.axes[axis]
         op = OperatingPoint(throttle=ai.op.throttle, motor_hz=ai.op.motor_hz, vbat=ai.op.vbat, d_boost=1.0,
                             dyn_notch_hz=ai.op.dyn_notch_hz)
-        for tune, col, lab in ((old, C_OLD, "current"), (new, C_NEW, "new")):
-            r = step_response(tune, axis, _plant_for(idn, axis, tune), op, idn.dt, loop_hz, rx_hz, amplitude=300,
-                              ramp_s=0.05, duration=0.25, time_scale=idn.time_scale)
+        for tune, col, lab in ((old, C_OLD, "on quad"), (new, C_NEW, "new")):
+            amp, ramp = (stim or {}).get(axis, (300.0, 0.05))
+            r = step_response(tune, axis, _plant_for(idn, axis, tune), op, idn.dt, loop_hz, rx_hz, amplitude=amp,
+                              ramp_s=ramp, duration=max(0.25, 2 * ramp + 0.1), time_scale=idn.time_scale)
             m = step_metrics(r)
             metrics[(axis, lab)] = m
-            if lab == "current":
+            if lab == "on quad":
                 axs[axis].plot(r["t"] * 1000, r["setpoint"], color=C_MEAS, lw=1, ls="--", label="setpoint")
             axs[axis].plot(r["t"] * 1000, r["gyro"], color=col,
                            label=f"{lab}: stick→gyro lag {m['stick_lag_ms']:.1f} ms, overshoot {m['overshoot_pct']:.0f}%")
-        axs[axis].set_title(f"{AXES[axis]}: stick flick 300°/s in 50 ms (model)")
+        a_, r_ = (stim or {}).get(axis, (300.0, 0.05))
+        axs[axis].set_title(f"{AXES[axis]}: stick move {a_:.0f}°/s in {r_ * 1000:.0f} ms (model)")
         axs[axis].set_xlabel("ms")
         axs[axis].grid(True, alpha=0.3)
         axs[axis].legend(fontsize=8)
@@ -123,7 +126,7 @@ def noise_compare(nm, bands_old: np.ndarray, bands_new: np.ndarray, budget: dict
     fig, axs = plt.subplots(1, 3, figsize=(15, 4))
     thr = [b.throttle for b in nm.bands]
     for axis in range(3):
-        axs[axis].plot(thr, bands_old[:, axis], "o-", color=C_OLD, label="current")
+        axs[axis].plot(thr, bands_old[:, axis], "o-", color=C_OLD, label="on quad")
         axs[axis].plot(thr, bands_new[:, axis], "o-", color=C_NEW, label="new")
         if budget is not None and axis in budget:
             axs[axis].plot(thr, budget[axis], "--", color=C_ALT, label="budget (proven-safe level)")

@@ -55,13 +55,16 @@ def margins_table(doc: Doc, assessment: dict, noise_model: bool) -> None:
         for ax, e in a["axes"].items():
             h, i, fu, w = e["hover"], e["idle"], e["full"], e["worst"]
             st = e.get("step", {}).get("flick")
+            af = e.get("step", {}).get("as_flown")
             rows.append([name, ax, "ok" if not e.get("violations") else "FAIL", _f(h["fc"]), _f(h["pm"], "{:.0f}"),
                          f"{_f(h['ms'], '{:.2f}')} @ {_f(h.get('ms_hz'), '{:.0f}')} Hz", _f(i["fc"]), _f(i["ms"], "{:.2f}"),
                          _f(fu["pm"], "{:.0f}"), f"{_f(w['pm'], '{:.0f}')} / {_f(w['ms'], '{:.2f}')}",
                          _f(e.get("noise_vs_safe"), "{:.2f}") if noise_model else "n/a",
+                         f"{af['delay_50_ms']:.1f} ms / +{af['peak_pct']:.0f} %" if af else "—",
                          f"{st.get('stick_lag_ms', st['tracking_lag_ms']):.1f} ms / {st['overshoot_pct']:.0f} %" if st else "—"])
     doc.table(["tune", "axis", "limits", "hover fc [Hz]", "hover PM [°]", "hover Ms", "idle fc [Hz]", "idle Ms",
-               "full PM [°]", "worst PM / Ms", "noise × safe", "stick lag / overshoot"], rows, status_col=2)
+               "full PM [°]", "worst PM / Ms", "noise × safe", "as flown: 50 % / peak", "typical move: lag / overshoot"],
+              rows, status_col=2)
 
 
 def targets_section(doc: Doc, result: dict, idn) -> None:
@@ -71,9 +74,10 @@ def targets_section(doc: Doc, result: dict, idn) -> None:
         if k in g:
             fl = SAFETY_FLOOR.get(k if k != "noise_budget" else "noise_budget_max")
             rows.append([k, str(g[k]), src.get(k, ""), "" if fl is None else fl, why.get(k, "")])
-    unc = getattr(idn, "uncertainty", None) or {"k_hi": 1.10, "k_lo": 0.88, "dT": 0.0003}
-    doc.p(f"Every case is checked: idle, hover, mid and full throttle; base D and D-max; the gain "
-          f"+{(unc['k_hi'] - 1) * 100:.0f} % / −{(1 - unc['k_lo']) * 100:.0f} % and delay +{unc['dT'] * 1000:.1f} ms variants; "
+    u = float(g.get("gain_uncertainty", 0.1))
+    doc.p(f"Every case is checked: idle, hover, mid (throttle {g.get('mid_throttle', 0.5)}) and full throttle; base D and "
+          f"D-max; the gain +{u * 100:.0f} % / −{(1 - 1 / (1 + 1.25 * u)) * 100:.0f} % and delay "
+          f"+{g.get('delay_uncertainty_ms', 0.3)} ms variants ({src.get('gain_uncertainty', 'identification')}); "
           "the dynamic notch at its minimum. Idle limits fall back to the flown tune's idle margins where it misses them. "
           "Targets marked 'convention' are starting points, not measurements; the safety floor is fixed.", "muted")
     doc.table(["target", "value", "source", "safety floor", "reason"], rows)
@@ -82,7 +86,7 @@ def targets_section(doc: Doc, result: dict, idn) -> None:
 def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -> Path:
     idn = an.idn
     new = result["assessment"].get("new", {})
-    cur = result["assessment"].get("on_quad") or result["assessment"].get("current", {})
+    cur = result["assessment"].get("on_quad") or result["assessment"].get("logged", {})
     v = result.get("verdict")
     gate = new.get("gate", "absolute")
     doc = Doc(f"Tune for {an.craft or 'the quad'}", kind="bftune tune report",
@@ -94,8 +98,14 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
     for ax in ("roll", "pitch", "yaw"):
         a0, a1 = cur.get("axes", {}).get(ax), new.get("axes", {}).get(ax)
         if a0 and a1 and a0.get("step") and a1.get("step"):
-            l0, l1 = a0["step"]["flick"]["stick_lag_ms"], a1["step"]["flick"]["stick_lag_ms"]
-            cards.append((f"Stick lag {ax}", f"{l0:.1f} → {l1:.1f} ms", "pass" if l1 <= l0 + 0.05 else "warn"))
+            f0, f1 = a0["step"].get("as_flown"), a1["step"].get("as_flown")
+            if f0 and f1:  # the pilot's own stick inputs replayed: the most realistic stick-response prediction
+                cards.append((f"Stick response {ax} (as flown)",
+                              f"{f0['delay_50_ms']:.1f} → {f1['delay_50_ms']:.1f} ms · +{f0['peak_pct']:.0f} → +{f1['peak_pct']:.0f} %",
+                              None))
+            else:
+                l0, l1 = a0["step"]["flick"]["stick_lag_ms"], a1["step"]["flick"]["stick_lag_ms"]
+                cards.append((f"Stick lag {ax}", f"{l0:.1f} → {l1:.1f} ms", "pass" if l1 <= l0 + 0.05 else "warn"))
     for ax in ("roll", "pitch"):
         a0, a1 = cur.get("axes", {}).get(ax), new.get("axes", {}).get(ax)
         if a0 and a1:
@@ -104,11 +114,17 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
     if nz:
         cards.append(("Motor noise", f"{max(nz):.2f}× proven-safe", None))
     doc.cards(cards)
+    if result.get("experiment"):
+        doc.note(f"EXPERIMENT: {result['experiment']}. The model passes it, but it goes beyond what has flown on this "
+                 "quad (see the notes and the targets' sources); fly it with the checks below.", "warn")
     if v == "PASS" and gate == "relative":
         doc.note("PASS under the relative gate (no chirp): the tune is predicted to be no worse than the flown tune "
                  "wherever the design targets are missed. Fly a chirp set for a verified tune.", "warn")
     elif v == "PASS":
-        doc.note("Every design target and the safety floor are met in every case, with the noise within the budget.", "pass")
+        nb_src = (result.get("target_sources") or {}).get("noise_budget", "")
+        doc.note("Every design target and the safety floor are met in every case, with the noise within the budget"
+                 + (" given for this tune only (command line), not the stored one" if nb_src == "command line" else "")
+                 + ".", "pass")
     else:
         doc.note("The model predicts violated targets - do not fly without reviewing them:", "fail")
         doc.items([f"{ax}: {x}" for ax, xs in result.get("violations", {}).items() for x in xs])
@@ -133,9 +149,13 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
     doc.items([f"note: {n}" for n in new.get("notes", [])])
     meas = (getattr(an, "extra", None) or {}).get("measured_step") or {}
     if meas:
-        doc.p("Stick lag measured in the log of the flown tune (checks the model's 'current' stick lag): "
-              + ", ".join(f"{ax} {m['delay_50_ms']:.0f} ms ({m.get('confidence', '?')} confidence)" for ax, m in meas.items())
-              + ".", "muted")
+        mod = (getattr(an, "extra", None) or {}).get("model_step") or {}
+        doc.p("'As flown' = the model replaying the pilot's own logged stick inputs, turned into a step by the same "
+              "estimator as the log. Measured in the log of the flown tune (the check for the 'logged' row): "
+              + ", ".join(f"{ax} {m['delay_50_ms']:.1f} ms / +{m['overshoot_pct']:.0f} %"
+                          + (f" (model {mod[ax]['delay_50_ms']:.1f} ms / +{mod[ax]['overshoot_pct']:.0f} %)" if ax in mod else "")
+                          + f", {m.get('confidence', '?')} confidence" for ax, m in meas.items())
+              + ". Trust the model's *changes* in peak more than its absolute peak where the two differ.", "muted")
     plots = result.get("plots", {})
     doc.figure(plots.get("loop"), "Sensitivity |S| (disturbance rejection): lower is better; the peak is what is felt as "
                                   "propwash wobble")

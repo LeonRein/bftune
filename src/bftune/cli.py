@@ -152,7 +152,7 @@ def cmd_assess(a) -> int:
     wb = _wb(a)
     res = {}
     if a.with_current:
-        res["current"] = wb.assess(wb.logged, steps=not a.fast)
+        res["logged"] = wb.assess(wb.logged, steps=not a.fast)  # the tune that flew in the log
         if wb.on_quad is not wb.logged:
             res["on_quad"] = wb.assess(wb.on_quad, steps=not a.fast)
     if a.with_safe:
@@ -205,7 +205,7 @@ def cmd_grid(a) -> int:
     wb = _wb(a)
     base, _ = wb.load(a.file)
     (k1, v1), (k2, v2) = _pairs([a.key1, a.values1, a.key2, a.values2], "grid")
-    res = wb.grid(base, k1, v1, k2, v2)
+    res = wb.grid(base, k1, v1, k2, v2, steps=a.steps)
     print(json.dumps(res, indent=1, default=float) if a.json else format_grid(res))
     return 0
 
@@ -224,8 +224,12 @@ def cmd_suggest(a) -> int:
         ass = wb.assess(t, steps=False, axes=axes)
         tot = sum(e["objective_db"] * (0.5 if ax == "yaw" else 1.0) for ax, e in ass["axes"].items())
         print(f"== {Path(f).name}: verdict with suggested gains {ass['verdict']}, total objective {tot:.2f} dB")
+        for n in ass["notes"]:
+            if "1-3 kHz" in n or "STALE" in n.upper() or "older" in n:
+                print(f"   note: {n}")
         for ax, r in res.items():
-            lag = f"  stick lag {r['stick_lag_ms'][0]:.1f} -> {r['stick_lag_ms'][1]:.1f} ms" if r.get("stick_lag_ms") else ""
+            lag = (f"  as flown {r['as_flown_50_ms'][0]:.1f} -> {r['as_flown_50_ms'][1]:.1f} ms, peak "
+                   f"+{r['as_flown_peak_pct'][0]:.0f} -> +{r['as_flown_peak_pct'][1]:.0f} %") if r.get("as_flown_50_ms") else ""
             print(f"{ax:5s}: P {r['p']} I {r['i']} D {r['d']} d_max {r['d_max']}  {'passes' if r['feasible'] else 'FAILS'} "
                   f"noise {r['noise_vs_safe']:.2f}x safe  worst PM {r['worst']['pm']:.0f}° Ms {r['worst']['ms']:.2f}"
                   f"  obj {ass['axes'][ax]['objective_db']:.2f} dB{lag}" + (f"  [{r['range']}]" if "range" in r else ""))
@@ -333,9 +337,12 @@ def cmd_targets(a) -> int:
     for k in a.unset or []:
         data["overrides"].pop(k, None)
         data["reasons"].pop(k, None)
-    g, src = build_goals(None, wb.flown_hover_fc, data["overrides"], None)  # validates against the safety floor
+    g, src = build_goals(None, wb.flown_hover_fc, data["overrides"], None, wb.profile, wb._unc, wb.an.tune)  # checks the floor
     if a.set or a.unset or a.reset:
         save_targets(Path(a.out), data)
+    if g.peak_max is None and wb.peak_max:  # default: the flown tune's own as-flown peak (computed by the workbench)
+        g.peak_max = tuple(wb.peak_max.get(ax) for ax in ("roll", "pitch", "yaw"))
+        src["peak_max"] = wb.target_sources.get("peak_max", "from the flown tune (as-flown peak)")
     print(json.dumps({"targets": goals_dict(g), "sources": src, "reasons": data["reasons"]}, indent=1, default=list)
           if a.json else format_targets(g, src, data["reasons"]))
     if (a.set or a.unset or a.reset) and not a.json:
@@ -435,18 +442,33 @@ def cmd_ff(a) -> int:
     base, _ = wb.load(a.file)
     axis = AXES.index(a.axis)
     rows = wb.ff_table(base, axis, parse_values(a.values))
-    print(f"feedforward f_{a.axis}: flick = 300°/s in 50 ms, snap = fast move below the max-rate limit")
-    print("lag = gyro vs smoothed setpoint; stick = gyro vs raw stick (end-to-end, includes RC smoothing)")
-    print(f"{'F':>5s} | {'flick lag':>9s} {'stick':>7s} {'overshoot':>9s} {'settle':>7s} | {'snap lag':>8s} {'stick':>7s} {'overshoot':>9s}")
+    st = wb.stimuli(axis)
+    print(f"feedforward f_{a.axis}: flick = {st['flick'][0]:.0f}°/s in {st['flick'][1] * 1000:.0f} ms, snap = "
+          f"{st['snap'][0]:.0f}°/s in {st['snap'][1] * 1000:.0f} ms ({st['source']})")
+    print("lag = gyro vs smoothed setpoint; stick = gyro vs raw stick (end-to-end, includes RC smoothing);")
+    print("as flown = the model replaying this pilot's logged stick inputs (the measured step of the flown tune is the check)")
+    print(f"{'F':>5s} | {'flick lag':>9s} {'stick':>7s} {'overshoot':>9s} {'settle':>7s} | {'snap lag':>8s} {'stick':>7s} "
+          f"{'overshoot':>9s} | {'as flown 50%':>12s} {'peak':>6s}")
     tf, ts = wb.goals.ff_overshoot_flick, wb.goals.ff_overshoot_snap
     for r in rows:
         fl_, sn = r["flick"], r["snap"]
-        over = "  over target" if fl_["overshoot_pct"] > tf or sn["overshoot_pct"] > ts else ""
+        af = r.get("as_flown")
+        pk = wb.peak_max.get(a.axis)
+        if af and pk is not None:
+            over = f"  above the peak target +{pk:.0f} %" if af["peak_pct"] > pk + 1.0 else ""
+        else:
+            over = "  over target" if fl_["overshoot_pct"] > tf or sn["overshoot_pct"] > ts else ""
         print(f"{r['f']:>5} | {fl_['tracking_lag_ms']:8.1f}ms {fl_['stick_lag_ms']:5.1f}ms {fl_['overshoot_pct']:8.0f}% "
               f"{fl_['settle_5pct_ms']:6.0f}ms | {sn['tracking_lag_ms']:7.1f}ms {sn['stick_lag_ms']:5.1f}ms {sn['overshoot_pct']:8.0f}%"
+              + (f" | {r['as_flown']['delay_50_ms']:10.1f}ms {r['as_flown']['peak_pct']:5.0f}%" if r.get("as_flown") else "")
               + over)
-    print(f"overshoot targets: flick <= {tf:.0f} %, snap <= {ts:.0f} % ({wb.target_sources.get('ff_overshoot_flick')}; "
-          "`bftune targets` to change them for this pilot)")
+    pk = wb.peak_max.get(a.axis)
+    if pk is not None:
+        print(f"peak target (as flown): +{pk:.0f} % ({wb.target_sources.get('peak_max')}; `bftune targets --set "
+              "'peak_max=R,P,Y # why'` for this pilot)")
+    else:
+        print(f"overshoot targets: flick <= {tf:.0f} %, snap <= {ts:.0f} % ({wb.target_sources.get('ff_overshoot_flick')}; "
+              "`bftune targets` to change them for this pilot)")
     return 0
 
 
@@ -484,7 +506,8 @@ def cmd_emit(a) -> int:
     wb = _wb(a)
     tune, reasons = wb.load(a.file)
     dest = Path(a.to) if a.to else Path(a.out)
-    res = wb.emit(tune, reasons, extra={"method": "bftune agent (tune skill)"}, log=_log, dest=dest, profile=a.profile)
+    res = wb.emit(tune, reasons, extra={"method": "bftune agent (tune skill)"}, log=_log, dest=dest, profile=a.profile,
+                  experiment=a.experiment)
     print((dest / "tune_cli.txt").read_text())
     return 0 if res["verdict"] == "PASS" else 2
 
@@ -701,6 +724,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("values1")
     s.add_argument("key2")
     s.add_argument("values2")
+    s.add_argument("--steps", action="store_true", help="also the as-flown step (50 %% time, peak) per cell")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_grid)
 
@@ -730,6 +754,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--to", help="write the deliverables here instead of the analysis directory (e.g. the tune folder)")
     s.add_argument("--profile", type=int, choices=range(4), metavar="N",
                    help="PID profile index when no dump gives it (e.g. from the project's earlier dumps; confirm with the pilot)")
+    s.add_argument("--experiment", metavar="WHY",
+                   help="mark the tune as a supervised experiment (e.g. a noise-headroom flight): stamped on the CLI, "
+                        "report and tune.json")
     s.set_defaults(fn=cmd_emit)
 
     s = sub.add_parser("optimize", help="optional automatic baseline (slow global search, 10-60 min)")

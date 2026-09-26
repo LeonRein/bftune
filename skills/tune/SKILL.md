@@ -12,7 +12,10 @@ quad's dynamics, models noise and computes margins in about a second per questio
 what to investigate, which hypotheses matter, what to change and when the evidence is good
 enough. The pilot never runs a command. They talk to you, fly, and paste the CLI you give them.
 
-No two quads or logs are alike, so don't run a fixed script. Work like a good engineer:
+No two quads or logs are alike, so don't run a fixed script. The skills give you what needs
+Betaflight source knowledge and control theory; what is *good* for this quad you derive from its
+logs, its dump and its pilot. Numbers in the skills marked *(convention)* or *(seen on …)* are
+starting points, not rules. Work like a good engineer:
 
 ```
 understand → diagnose → hypothesize → experiment (model) → decide → verify → explain → (pilot flies) → learn
@@ -50,7 +53,8 @@ Load the knowledge skills when you need them. They are not preloaded:
      - propwash handling (dives, flips, chops);
      - smoothness (cinematic, no jitter);
      - clean punch-outs;
-     - efficiency and cool motors (flight time).
+     - efficiency and cool motors (flight time);
+     - or anything in their own words.
 
      Ask what they want *more of*, not what they dislike. A bothering symptom is welcome as extra
      information, but the priorities steer the tune.
@@ -93,8 +97,9 @@ Load the knowledge skills when you need them. They are not preloaded:
    - The model comes from a log **with chirps**. With several, prefer the cleanest: no gaps or
      corrupt frames, and the best validation. Cross-check the others against it; a disagreement
      is a finding to explain.
-   - A log whose tune flew with cool or slightly warm motors is a noise reference (`--safe-log`).
-     Its header holds its full tune, so it needs no dump.
+   - A log whose tune flew with cold, cool or slightly warm motors is a noise reference
+     (`--safe-log`); its header holds its full tune, so it needs no dump. A tune that ran warm or hot
+     is evidence for the budget (`bftune:filters-noise` → calibration table), not a reference.
    - Logs without chirps are evidence: `diagnose` and `errspec`.
    - **"The quad still runs the tune from log X"** and no fresh dump: pass that log as `--dump`
      (`analyze LOG --dump LOG_X`); its header is the tune on the quad. The PID profile index is then
@@ -115,7 +120,9 @@ Load the knowledge skills when you need them. They are not preloaded:
 
 - `bftune diagnose LOG [OTHER_LOGS...] -v` works on any log, with or without chirps. It finds
   resonances in the tracking error, propwash, bounce-back, saturation, motor imbalance, desyncs
-  and heat risk.
+  and motor noise. Its bands scale with this quad (hover motor frequency and throttle), and its
+  severity only ranks findings for attention: judge the evidence numbers, and compare them with
+  the other logs of this quad.
 - **Look at the flights yourself.** You can read images, so use them to see what numbers hide:
   - `bftune logs LOG [OTHER_LOGS...] -o <dir>/analysis/logs` writes `logs.html` and PNGs: noise vs
     throttle spectrograms (raw gyro, filtered gyro, D-term, with the motor harmonics drawn in), the
@@ -131,11 +138,12 @@ Load the knowledge skills when you need them. They are not preloaded:
 - `bftune analyze LOG [--dump DUMP] -o <dir>/analysis/NN [--safe-log X] [--safe-cli Y]` is run once
   per log (10-60 s). It identifies the plant and builds the noise model, and writes
   `analysis.html` (model, fit, noise, spectrogram, measured step response, findings: the pilot can
-  open it too). Pass every other tune of this quad that flew with **cool motors** as
-  `--safe-log`/`--safe-cli`. They set the noise budget.
+  open it too). Pass every other tune of this quad that flew with cold, cool or slightly warm motors
+  as `--safe-log`/`--safe-cli`: they set the noise reference.
 - `bftune brief -o <dir>/analysis/NN` prints one JSON with everything: model and confidence,
-  flight facts, the current tune's margins, proven-safe tunes, noise, findings and warnings. Read it
-  fully.
+  flight facts and how the quad is flown (`flight_profile`: hover throttle and motor frequency,
+  throttle use, the pilot's stick moves, link rate), the current tune's margins, the measured vs
+  modelled step response, proven-safe tunes, noise, findings and warnings. Read it fully.
 
 Then write the situation down in the worklog (`<dir>/tunes/NN-date/worklog.md`, create the folder
 with `bftune project next-tune-dir <dir>`, which prints the new path):
@@ -150,7 +158,7 @@ with `bftune project next-tune-dir <dir>`, which prints the new path):
 ## 3. Hypothesize and experiment
 
 For each limitation, form a hypothesis with a mechanism, then test it on the model before you
-believe it. Examples:
+believe it. Examples (from real sessions; the numbers are theirs, not targets):
 - "Propwash comes from the 45 Hz sensitivity peak. Lower P/D with less D-term filter lag should
   flatten it without losing idle authority." Test with `sweep d_roll`, `sweep dterm_lpf2_static_hz`,
   then `assess`.
@@ -192,8 +200,9 @@ For **every** group, do one of these:
 - **tested `model`, `step` or `idle case`:** run at least one experiment (a `sweep`, `ff`, or
   `suggest` on variant files), even if you then keep the logged value. For example, sweep
   `rpm_filter_q` and `rpm_filter_weights`, `dyn_notch_q/min/count`, `yaw_lowpass_hz`,
-  `tpa_breakpoint`, `feedforward_boost` / `smooth_factor` / `averaging` with `--steps`, and
-  `rc_smoothing_auto_factor --steps`.
+  `tpa_breakpoint`, `feedforward_boost` / `smooth_factor` / `averaging` with `--steps`,
+  `rc_smoothing_auto_factor --steps`, `iterm_relax` and `use_integrated_yaw` (`coverage` says which
+  groups the model tests: trust it over this list).
 - **tested `none`:** look for evidence in the flight data and the pilot report, then decide:
   - `diagnose`: `throttle_punch_dip` → anti-gravity; `bounce_back` → I-term relax;
     `pidsum_clipping` → limits;
@@ -211,13 +220,14 @@ Choose using `bftune:loop-shaping` and `bftune:filters-noise`, weighted by what 
 Hard rules:
 - `bftune emit` must say **PASS**. Exit code 2 means FAIL: never deliver it. If the design margins
   can't be met, deliver the best passing tune and say what limits it.
-- The noise budget is set from the pilot's motor temperature (`bftune:filters-noise`), not assumed.
-  Beyond 1.25× the proven-safe level only after a supervised noise-headroom flight.
+- The noise budget comes from this quad's noise-vs-temperature evidence (`bftune:filters-noise`),
+  not assumed. Beyond 1.25× the reference only after a supervised noise-headroom flight.
 - With a **no-chirp model** (`identification.source = freestyle`) the gate is relative: no worse
-  than the flown tune. Keep changes small and targeted at diagnosed problems (about ±15 % on P/D,
-  filters one step at a time), and always ask for a chirp flight for the next round.
-  - Leave feedforward alone unless the pilot complains about stick feel. Its step simulation
-    depends on the uncertain plant gain.
+  than the flown tune. Keep changes inside what the uncertain model can vouch for (`suggest` stays
+  within ±15 % of the flown P/D, `gain_range`; filters one step at a time) and targeted at diagnosed
+  problems, and always ask for a chirp flight for the next round.
+  - Change feedforward only when the measured step response (`analysis.html`) and the pilot point
+    the same way: the as-flown replay depends on the uncertain plant gain.
   - If the real fix for the main complaint can't pass (e.g. `thrust_linear` or a large P change),
     deliver the partial fix that passes, say plainly what is held back and why, and make the chirp
     flight the headline of the next step.
@@ -241,18 +251,17 @@ When the pilot says they pasted it (or sends a new dump), check it with
 and settings that changed by accident (e.g. `blackbox_high_resolution` reset to its default).
 
 ## Know when to stop
-Tune for what the pilot can feel. Rough thresholds for a noticeable difference:
-- stick lag: about 1 ms or more;
-- hover or idle Ms: about 0.2 or more;
-- crossover: about 15 % or more;
-- errspec bands: about 3 dB or more;
-- motor noise: about 15 % (heat).
+Tune for what *this* pilot can feel. The best threshold is their own history: `history.md` shows
+which past changes they noticed and which they didn't (record it every iteration). Until you know
+it, rough starting values *(convention)*: stick lag about 10-15 % of the as-flown 50 % time and more
+than the measurement's spread; hover or idle Ms about 0.2; crossover about 15 %; errspec bands about
+3 dB, or the spread between two logs of the same tune; motor noise about 15 %.
 
-Changes below all of these are not worth a flight. Say so, and stop or ask what the pilot wants
-next, when:
+Changes below what the pilot can feel are not worth a flight. Say so, and stop or ask what the pilot
+wants next, when:
 - the pilot is happy and the data shows nothing to fix;
-- the remaining knobs sit at a limit (Ms at 2.0, noise at the budget);
-- or the last iteration was already below these thresholds.
+- the remaining knobs sit at a limit (Ms at `ms_max`, noise at the budget);
+- or the last iteration was already below what they noticed before.
 
 When the noise budget is what limits the quad and its motors come down cold, the next real step is a
 **noise-headroom flight** (`bftune:filters-noise`), not more fine-tuning. Hardware comes first: with a
@@ -273,8 +282,9 @@ findings never block a *conservative* tune, but they do block an aggressive one.
     dips in hard flips are normal. Judge the context: a stall right after a crash in the same log,
     with the prop replaced since and the motor spinning freely, is explained; one at steady
     throttle on undamaged hardware is not. Say which it is and why;
-  - motor imbalance above about 30 % (bent prop, bad motor). Below that it is usually CG or trim:
-    tell the pilot the direction `diagnose` reports and continue;
+  - a motor imbalance that `motors` attributes to one motor (rpm per command off from the others) or
+    that grows between logs: a bent prop, bearing or weak motor. A steady offset in one direction
+    is usually CG or trim: tell the pilot the direction `diagnose` reports and continue;
   - saturation at part throttle (overweight or weak motors);
   - a mechanical resonance that moves with nothing.
 - The firmware is not 2026.6.x (`inspect` warns; `analyze` refuses older releases). See
@@ -284,3 +294,6 @@ findings never block a *conservative* tune, but they do block an aggressive one.
 Known, unresolved hardware issues (a bent arm, a suspect motor) are the pilot's to fix. Decide with
 the evidence what they block: they always block a noise-headroom flight, and they should lower the
 noise budget only if they make noise or heat (compare the motors' logged noise and temperature).
+After a repair, a logged pack on the known tune confirms the fix. If the pilot won't fly one on its
+own, have them log a pack on the current tune first in the same session, then the new tune, with
+explicit stop rules (any stutter or twitch in the first pack: don't fly the second).

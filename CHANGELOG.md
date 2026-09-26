@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.8.0
+An audit of every number and rule in the skills and the judging code (about 460 items) against one question: does
+it need Betaflight source knowledge or control theory (the author's), or can the agent derive it better from this
+quad's logs, dump and pilot? The decisions and the rule are in `docs/knowledge-split.md`.
+- **The log sets the scales.** `analyze` measures a flight profile (hover throttle and motor frequency, throttle
+  use, the pilot's typical and fast stick moves, the RC link rate). Diagnose bands (resonance, propwash, I-term,
+  motor noise), throttle bands, the bounce-back trigger, the noise model's motion/noise boundary and the chirp
+  quality warning scale with it instead of 5" numbers. The "mid" design case sits at the throttle the pilot uses.
+- **Robust variants from the data:** the gain spread between chirp rounds (5": ±11 % over 8 rounds), never
+  narrower than ±10 %; widen them with `targets`, never narrow them.
+- **As-flown step response for every candidate:** the model replays the pilot's logged setpoint (recorded after
+  RC smoothing) through the same estimator as the measurement. `assess`, `sweep --steps`, `ff` and the report show
+  it; the new target `peak_max` defaults to the flown tune's own peak. The typical/fast stick-move tests use the
+  pilot's measured moves instead of a 300 deg/s-in-50 ms flick.
+- **Data first in diagnose:** imbalance and motor noise are always reported; severities are labelled heuristics;
+  saturation respects `motor_output_limit`; the motor-noise band no longer depends on the log rate; crash
+  detection needs a pegged gyro.
+- **Skills:** every number is a firmware fact, the safety floor, a derivation procedure, or a labelled starting
+  point. Per-quad calibration lives in `quad.md` (flown tunes vs feel, noise vs motor temperature, which changes
+  the pilot noticed) and drives the targets, the noise budget and the stop rule. Contradictions removed (D/P and
+  I/P windows, reference-tune criterion, noise-budget rules, FF pitfall, Ms stop limit).
+- Fixes: `coherent_to_hz` is contiguous; `rules.py` uses the FF targets, no unchecked rpm-weight claim, dyn idle
+  p20 within the firmware range; `motor_poles` missing from log and dump is reported.
+
 ## 0.7.0
 Make the agent's judgement, not hidden constants, decide what a good tune is for this quad and pilot, and let it
 see the flights.

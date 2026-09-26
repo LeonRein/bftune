@@ -44,11 +44,14 @@ a question in about a second, so explore instead of guessing.
    limit named.
 
 ## Rules
-- Never exceed the noise budget. Raise it only with a proven-safe tune (cool motors) of the same quad.
-- If `identification.source` is `freestyle`, the gate is relative. Stay within about ±15 % of the
-  flown P/D and change filters one step at a time.
-- Stop and report if an identification gate fails, or a finding points to hardware (desync,
-  imbalance, saturation at hover).
+- Never exceed the noise budget in `targets`. It comes from the quad's noise-vs-temperature evidence
+  (`bftune:filters-noise`); don't raise it yourself: report when it is the binding limit.
+- The design targets in `targets` are the caller's decision; if one looks wrong for this quad, say so
+  with the evidence instead of working around it.
+- If `identification.source` is `freestyle`, the gate is relative. Stay within what the uncertain
+  model can vouch for (`suggest`: ±15 % of the flown P/D) and change filters one step at a time.
+- Stop and report if an identification gate fails, or a finding points to hardware (a stall, one
+  motor off in `motors`, saturation at part throttle).
 - Prefer robust, explainable choices over the last 0.1 dB. The pilot flies the tune, not the model.
 - Do not emit or deliver to the pilot yourself unless you were asked to. Return to the caller:
   - the candidate path;

@@ -74,5 +74,6 @@ def next_tune_dir(path: Path) -> Path:
     if hist.exists():
         import re
 
-        nums += [int(m) for m in re.findall(r"^##\s+(\d+)\b", hist.read_text(), flags=re.M)]
+        # "## 03 - date - summary" (deliver skill); a date heading ("## 2026-09-26 - ...") is not an iteration
+        nums += [int(m) for m in re.findall(r"^##\s+(\d{1,3})\s+-", hist.read_text(), flags=re.M)]
     return tunes / f"{(max(nums) + 1) if nums else 1:02d}-{_dt.date.today().isoformat()}"
