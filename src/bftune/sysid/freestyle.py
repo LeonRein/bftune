@@ -95,7 +95,8 @@ def identify_freestyle(fl: Flight, tune: Tune, prior_T: float = PRIOR_T) -> Iden
     for axis in range(3):
         frf, used = freestyle_frf(fl, axis)
         if not used:
-            notes.append(f"{AXES[axis]}: no usable stick activity")
+            notes.append(f"{AXES[axis]}: no 2 s acro window with stick activity on this axis (setpoint std >= 20 deg/s) "
+                         "and < 8 % motor saturation")
             continue
         idx = np.unique(np.concatenate([np.arange(s, s + int(2 * fl.fs)) for s in used]))
         idx = idx[idx < fl.n]
@@ -119,7 +120,8 @@ def identify_freestyle(fl: Flight, tune: Tune, prior_T: float = PRIOR_T) -> Iden
         try:
             fit = _fit_gain_only(structure, fixed, frf.f, frf.H["y"], w)
         except ValueError as e:
-            notes.append(f"{AXES[axis]}: {e}")
+            notes.append(f"{AXES[axis]}: {e} ({len(used)} stick windows, {int(use.sum())} frequency bands above 3 Hz "
+                         "with coherence >= 0.4: the stick moves on this axis don't explain the gyro well enough)")
             continue
         C = controller_fr(tune, axis, op, frf.f, dt, fl.loop_hz, time_scale=time_scale)
         m = use & (frf.coh["yf"] >= 0.6)

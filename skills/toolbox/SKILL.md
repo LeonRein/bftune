@@ -30,7 +30,8 @@ commands print human-readable text; most accept `--json`. Paths below:
 | `bftune brief -o A [--style S]` | 5-15 s | **the situation report** (JSON, also `A/brief.json`): identification source, uncertainty (from the chirp rounds) and plant per axis; flight facts; `flight_profile` (hover throttle and motor Hz, throttle percentiles, the pilot's stick moves, RC link rate: the scales this quad is judged on); the targets with their sources; current tune and its assessment; measured vs modelled step response; proven-safe tunes with their diffs and assessments; noise bands and persistent peaks; findings; warnings |
 
 Options shared by the log tools: `--exclude T0:T1` (repeatable) on `analyze`, `diagnose`, `errspec`,
-`logs` and `motors` treats a window as disarmed (a crash: `motors` prints crash times). `--dump`
+`logs` and `motors` treats a window as disarmed. Detected crashes are excluded automatically
+(`analyze --keep-crashes` keeps them). `--dump`
 accepts a CLI dump/diff **or a log** whose header is the tune on the quad now.
 
 ## The fast workbench (about 1 s per call, needs `A`)
@@ -43,7 +44,7 @@ them once with `bftune targets` (below). An analysis built by an older bftune is
 | command | answers |
 |---|---|
 | `bftune targets -o A [--set 'key=value # reason']... [--unset key] [--reset]` | the design targets this analysis uses (Ms, PM, GM, noise budget, as-flown step peak `peak_max`, D/P and I/P, bands, mid-throttle case, robust-variant sizes, search box, ...), each with its source (`from the flown tune…` / `from the log…` / `chirp rounds…` = derived from this quad's data, `convention` / `<style> convention` = a starting point, `override` = yours), the reason, and the fixed safety floor. Overrides are stored in `A/targets.json` and apply to every later command; after a change it prints the flown tune's verdict under the new targets. Values beyond the floor are rejected; robust variants can only be widened. |
-| `bftune candidate -o A cand.txt [--base other.txt] [--set 'key=value # reason']...` | writes a candidate file: the tune on the quad (or `--base`) plus the `--set` changes. Use it for every variant instead of editing files in the shell. It covers all flight-behaviour settings. |
+| `bftune candidate -o A cand.txt [--base other.txt] [--apply proposal.txt]... [--set 'key=value # reason']...` | writes a candidate file: the tune on the quad (or `--base`) plus the `--set` changes. `--apply` takes the `set` lines of a CLI file (a diff, a preset, someone's tune). Use it for every variant instead of editing files in the shell. It covers all flight-behaviour settings. |
 | `bftune assess -o A f1.txt [f2.txt ...] [--with-current] [--with-safe] [--fast] [--json]` (`--with-current` adds `logged` = the tune that flew in the log and, if the dump differs, `on_quad` = the tune on the quad now) | verdict (PASS/FAIL, `gate` absolute or relative), per axis hover/idle/full crossover, PM, GM, Ms (+ frequency), worst case and label, noise vs safe, the **as-flown** step (the model replaying this pilot's logged stick inputs: 50 % time, peak, dip), typical/fast stick-move lag and overshoot, violations, notes |
 | `bftune sweep -o A cand.txt KEY VALUES [KEY2 VALUES2 ...] [--steps]` | one table per setting: one row per value and axis with the axis verdict, hover crossover/PM/Ms@Hz, full PM, worst PM/Ms, noise, objective, first violation. VALUES are `20:50:5` or `a,b,c`; `100,100,0;100,50,0` for array settings. Several pairs = several independent sweeps in one call (no shell loops). |
 | `bftune grid -o A cand.txt KEY1 VALUES1 KEY2 VALUES2` | two settings at once (e.g. `p_pitch 38,40,42 d_pitch 35,37,39`): per axis a matrix of ok/NO, hover Ms, worst PM, noise, objective. Use it for P x D windows instead of scripts. |

@@ -120,6 +120,20 @@ def exclude(fl: Flight, windows: list[tuple[float, float]]) -> Flight:
     return fl
 
 
+def without_crashes(fl: Flight) -> tuple[Flight, list[tuple[float, float]]]:
+    """A view of the flight with detected crashes treated as disarmed (the original is not changed)."""
+    import copy
+
+    from .analysis.motors import crash_windows
+
+    cw = crash_windows(fl)
+    if not cw:
+        return fl, []
+    out = copy.copy(fl)
+    out.mode_mask = fl.mode_mask.copy()
+    return exclude(out, cw), cw
+
+
 def tuning_keys() -> set[str]:
     """Settings that shape flight behaviour (model inputs and everything the agent may tune)."""
     from .coverage import FEATURES

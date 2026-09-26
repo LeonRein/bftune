@@ -17,7 +17,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ..flight import AXES, Flight, exclude, load_flight, tuning_keys
+from ..flight import AXES, Flight, exclude, load_flight, tuning_keys, without_crashes
 from . import plots as _style  # noqa: F401  (shared matplotlib look)
 from .doc import Doc, evidence
 
@@ -259,7 +259,8 @@ def log_report(paths: list[str], out: Path, dump: str | None = None, index: int 
 
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    raw = {p: exclude(load_flight(p, dump if len(paths) == 1 else None, index), excluded) for p in paths}
+    raw = {p: without_crashes(exclude(load_flight(p, dump if len(paths) == 1 else None, index), excluded))[0]
+           for p in paths}
     fls = {_label(p, raw): fl for p, fl in raw.items()}
     one = len(fls) == 1
     first = next(iter(fls.values()))

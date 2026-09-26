@@ -145,7 +145,15 @@ def desync(fl: Flight) -> list[Finding]:
     real = [e for e in ev if e["kind"] in ("stall", "unclear")]
     mixer = sum(e["kind"] == "mixer" for e in ev)
     crash = sum(e["kind"] == "crash" for e in ev)
+    hits = [e for e in ev if e["kind"] == "impact"]
     out = []
+    if hits:
+        out.append(Finding("motor_dropout_after_impact", "warn",
+                           f"{len(hits)} rpm drop(s) right after an impact (all axes jolted first): motor "
+                           f"{', '.join(str(e['motor']) for e in hits)} at t={', '.join(str(e['t']) for e in hits)} s",
+                           {"events": hits}, ["prop strike on something", "the hit bent the prop or shaft"],
+                           ["check that prop for nicks and spin the motor by hand; not a tuning issue unless it repeats "
+                            "without a hit"]))
     if real:
         stalls = [e for e in real if e["kind"] == "stall"]
         out.append(Finding("motor_stall", "problem" if stalls else "warn",
@@ -161,7 +169,7 @@ def desync(fl: Flight) -> list[Finding]:
                            + (f", {crash} during a crash" if crash else ""),
                            {"mixer": mixer, "crash": crash,
                             "crash_at_s": sorted({e["t"] for e in ev if e["kind"] == "crash"})},
-                           [], ["a crash dominates error spectra and propwash statistics: `--exclude T0:T1` around it"]
+                           [], ["crashes are left out of the other findings and of `analyze` automatically"]
                            if crash else []))
     return out
 
@@ -446,11 +454,19 @@ def heat_risk(fl: Flight) -> list[Finding]:
 
 
 def diagnose(fl: Flight) -> list[dict]:
+    """All findings. Detected crashes are reported (desync / rpm_dips_explained) and left out of every other
+    statistic, so a crash can't pose as propwash, a resonance or a punch dip."""
+    from ..flight import without_crashes
+
     findings: list[Finding] = []
+    flx, cw = without_crashes(fl)
+    if cw:
+        findings.append(Finding("crash_excluded", "info", "crash(es) left out of the other findings: "
+                                + ", ".join(f"{a:g}-{b:g} s" for a, b in cw), {"windows_s": cw}))
     for fn in (log_quality, saturation, desync, oscillation, propwash, bounce_back, throttle_punch, pidsum_clipping,
                heat_risk):
         try:
-            findings += fn(fl)
+            findings += fn(fl if fn is desync else flx)
         except Exception as e:  # a failing heuristic must not hide the others
             findings.append(Finding(f"{fn.__name__}_error", "info", f"{fn.__name__} check failed: {e}"))
     order = {"problem": 0, "warn": 1, "info": 2}

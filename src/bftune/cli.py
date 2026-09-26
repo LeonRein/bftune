@@ -99,7 +99,7 @@ def cmd_analyze(a) -> int:
     from .pipeline import analyze
 
     analyze(a.log, a.dump, Path(a.out), a.index, log=_log, safe_logs=a.safe_log, safe_cli=a.safe_cli,
-            any_firmware=a.any_firmware, excluded=_windows(a.exclude))
+            any_firmware=a.any_firmware, excluded=_windows(a.exclude), keep_crashes=a.keep_crashes)
     return 0
 
 
@@ -135,6 +135,13 @@ def cmd_candidate(a) -> int:
 
     wb = _wb(a)
     tune, reasons = wb.load(a.base) if a.base else (wb.on_quad.copy(), {})
+    for src_file in a.apply or []:  # a CLI proposal (someone's diff, a preset): its `set` lines, later ones win
+        lines = [ln for ln in Path(src_file).read_text(errors="replace").splitlines() if ln.strip().startswith("set ")]
+        for ln in lines:
+            body = ln.split("#", 1)[0].strip()
+            tune, r = parse_candidate(tune, f"{body}  # from {Path(src_file).name}")
+            reasons.update(r)
+        print(f"applied {len(lines)} set lines from {src_file}")
     for kv in a.set or []:
         body, _, why = kv.partition("#")
         if "=" not in body:
@@ -237,7 +244,9 @@ def cmd_suggest(a) -> int:
                    f"+{r['as_flown_peak_pct'][0]:.0f} -> +{r['as_flown_peak_pct'][1]:.0f} %") if r.get("as_flown_50_ms") else ""
             print(f"{ax:5s}: P {r['p']} I {r['i']} D {r['d']} d_max {r['d_max']}  {'passes' if r['feasible'] else 'FAILS'} "
                   f"noise {r['noise_vs_safe']:.2f}x safe  worst PM {r['worst']['pm']:.0f}° Ms {r['worst']['ms']:.2f}"
-                  f"  obj {ass['axes'][ax]['objective_db']:.2f} dB{lag}" + (f"  [{r['range']}]" if "range" in r else ""))
+                  f"  obj {ass['axes'][ax]['objective_db']:.2f} dB{lag}" + (f"  [{r['range']}]" if "range" in r else "")
+                  + ("  [noise-limited: D/P capped by the budget; lighter filtering or more budget moves the cap]"
+                     if r.get("noise_limited") else ""))
             for v in r.get("violations", []):
                 print(f"        violated: {v}")
     print("(proposals with all other settings fixed; they optimise disturbance rejection (obj), not stick lag, and set\n"
@@ -372,10 +381,10 @@ def cmd_tunes(a) -> int:
 
 def cmd_errspec(a) -> int:
     from .analysis.errspec import error_spectrum
-    from .flight import exclude, load_flight
+    from .flight import exclude, load_flight, without_crashes
 
     splits = [None] if a.by_throttle is None else [(0.0, a.by_throttle), (a.by_throttle, 1.01)]
-    fls = {Path(p).name: exclude(load_flight(p), _windows(a.exclude)) for p in a.logs}
+    fls = {Path(p).name: without_crashes(exclude(load_flight(p), _windows(a.exclude)))[0] for p in a.logs}
     res = {}
     for sp in splits:
         tag = "" if sp is None else f" thr {'<' if sp[0] == 0 else '>='}{a.by_throttle:.2f}"
@@ -589,6 +598,8 @@ def main(argv: list[str] | None = None) -> int:
         s.add_argument("--safe-cli", action="append", help="CLI diff of another proven-safe tune")
         s.add_argument("--exclude", action="append", metavar="T0:T1",
                        help="ignore this time window (s), e.g. a crash; repeatable")
+        s.add_argument("--keep-crashes", action="store_true",
+                       help="don't leave detected crashes out (they are excluded automatically)")
         s.add_argument("--any-firmware", action="store_true",
                        help="analyze firmware older than the model (2026.6) anyway: margins/CLI may be wrong")
         s.add_argument("-o", "--out", default="bftune_out")
@@ -699,6 +710,8 @@ def main(argv: list[str] | None = None) -> int:
     _wb_args(s)
     s.add_argument("file")
     s.add_argument("--base", help="start from another candidate file instead of the tune on the quad")
+    s.add_argument("--apply", action="append", metavar="CLI_FILE",
+                   help="apply the `set` lines of a CLI file (a diff, a preset, someone's tune); repeatable, --set wins")
     s.add_argument("--set", action="append", metavar="KEY=VALUE[#reason]",
                    help="change a setting (repeatable); e.g. --set 'dterm_lpf2_type=PT3 # steeper filter'")
     s.set_defaults(fn=cmd_candidate)

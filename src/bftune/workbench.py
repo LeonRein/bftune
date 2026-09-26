@@ -463,13 +463,24 @@ class Workbench:
                        + f"; the check is min_hz > 0.95 x idle = {0.95 * idle:.0f} Hz): the motor fundamental at the lowest "
                        "speeds is not notched. It can show up as a low-throttle "
                        f"error peak near {idle:.0f} Hz. If `diagnose` shows a motor line there, lower rpm_filter_min_hz to "
-                       f"~{max(50, int(idle * 0.9 / 5) * 5)} (a notch near the idle crossover costs ~1 deg of idle PM: check "
-                       "with `sweep`). If it shows body motion, leave it.")
+                       f"~{max(50, int(idle * 0.9 / 5) * 5)}; rpm_filter_fade_range_hz decides how deep the notch is just "
+                       "above that floor. A notch near the idle crossover costs idle phase: `sweep rpm_filter_min_hz` and "
+                       "`rpm_filter_fade_range_hz` show how much on this quad. If `diagnose` shows body motion, leave it.")
         bp = tune.i("tpa_breakpoint")
         hover_thr = float(np.mean([ai.op.throttle for ai in self.idn.axes.values()])) if self.idn.axes else 0.3
         if 1000 + 1000 * hover_thr > bp and tune.i("tpa_rate") > 0:
             out.append(f"tpa_breakpoint {bp} is below hover (~{1000 + 1000 * hover_thr:.0f}): TPA already cuts gains at hover. "
                        "Raising it puts full P/D back at hover (check hover Ms and noise with `sweep tpa_breakpoint`).")
+        slider = {"simplified_pids_mode": ("p_", "i_", "d_", "d_max_", "f_"),
+                  "simplified_dterm_filter": ("dterm_lpf",), "simplified_gyro_filter": ("gyro_lpf",)}
+        for sk, prefixes in slider.items():
+            if str(tune.values.get(sk, "OFF")).upper() not in ("OFF", "0"):
+                touched = [k for k in tune.values if k.startswith(prefixes)
+                           and str(tune.values[k]) != str(self.on_quad.values.get(k))]
+                if touched:
+                    out.append(f"{sk} is {tune.values[sk]} while {', '.join(sorted(touched)[:4])} are set explicitly: "
+                               "the Configurator recomputes them from the slider when it saves (the model uses the "
+                               f"explicit values). Set {sk} = OFF with explicit values (emit does).")
         if tune.i("d_max_roll") > tune.i("d_roll") and tune.i("d_max_gain") == 0 and tune.i("d_max_advance") == 0:
             out.append("d_max > d but d_max_gain and d_max_advance are 0: D-max never engages (set d_max = d or enable a driver).")
         return out
@@ -552,7 +563,9 @@ class Workbench:
         for v in values:
             t = apply_setting(base.copy(), key, v)
             r = self.assess(t, steps=steps, axes=axes)
-            rows.append({"value": v, "verdict": r["verdict"], **{ax: e for ax, e in r["axes"].items()}})
+            rows.append({"value": v, "verdict": r["verdict"], "hf_beyond_flown": any("1-3 kHz" in n for n in r["notes"]),
+                         "motor_noise": r.get("motor_noise"), "noise_violations": r.get("noise_violations", []),
+                         **{ax: e for ax, e in r["axes"].items()}})
         return rows
 
     def grid(self, base: Tune, k1: str, v1: list, k2: str, v2: list, steps: bool = False) -> dict:
@@ -563,6 +576,7 @@ class Workbench:
                 t = apply_setting(apply_setting(base.copy(), k1, a), k2, b)
                 r = self.assess(t, steps=steps, axes=axes)
                 cells.append({k1: a, k2: b, "verdict": r["verdict"],
+                              "hf_beyond_flown": any("1-3 kHz" in n for n in r["notes"]),
                               "axes": {ax: {"ok": not e["violations"], "hover_ms": e["hover"]["ms"],
                                             "hover_fc": e["hover"]["fc"], "worst_pm": e["worst"]["pm"],
                                             "noise": e["noise_vs_safe"], "obj": e["objective_db"],
@@ -595,6 +609,8 @@ class Workbench:
             s0 = self.step_metrics(base, a)
             af0, af1 = s0.get("as_flown"), chk.get("step", {}).get("as_flown")
             out[AXES[a]] = {"p": r.p, "i": r.i, "d": r.d, "d_max": r.d_max, "feasible": r.feasible,
+                            "noise_limited": bool(prob.noise_Q is not None and self.noise_ref
+                                                  and r.noise_ratio >= 0.95 * self.noise_limit(a)),
                             "violations": chk["violations"][:3],
                             "as_flown_50_ms": [af0["delay_50_ms"], af1["delay_50_ms"]] if af0 and af1 else None,
                             "as_flown_peak_pct": [af0["peak_pct"], af1["peak_pct"]] if af0 and af1 else None,
@@ -693,7 +709,10 @@ class Workbench:
         if not self.an.nm.bands:
             comment.append("WARNING: no noise model - motor noise unchecked")
         if profile is None:  # known only from a real dump (or the agent: --profile from the project's older dumps)
-            profile = self.src.cfg.active_profile if "dump" in self.src.cfg.source else None
+            known = getattr(self.src.cfg, "profile_known", None)
+            if known is None:  # analysis from before 0.8: a real dump is the only way the source says "dump"
+                known = "dump" in self.src.cfg.source and "log header" not in self.src.cfg.source
+            profile = self.src.cfg.active_profile if known else None
         apply_txt, revert_txt, problems = cli_block(old, new, profile=profile, craft=self.an.craft,
                                                     firmware=self.an.firmware, extra_comment=comment)
         (dest / "tune_cli.txt").write_text(apply_txt)
@@ -745,6 +764,7 @@ def _f(v, fmt="{:.1f}"):
 
 def format_assessment(ass: dict) -> str:
     lines = []
+    common = set.intersection(*(set(a.get("notes", [])) for a in ass.values())) if len(ass) > 1 else set()
     t = next(iter(ass.values()), {}).get("targets")
     if t:
         ov = ", ".join(f"{k}={v}" for k, v in t["overrides"].items()) or "none"
@@ -766,9 +786,11 @@ def format_assessment(ass: dict) -> str:
                 if af:
                     lines.append(f"        as flown (model replays this pilot's stick inputs): 50 % at {af['delay_50_ms']:.1f} ms, "
                                  f"peak +{af['peak_pct']:.0f}%, dip -{af['dip_pct']:.0f}%")
-                lines.append(f"        stick→gyro lag: flick {s['flick']['stick_lag_ms']:.1f} ms, snap {s['snap']['stick_lag_ms']:.1f} ms"
-                             f" | overshoot flick {s['flick']['overshoot_pct']:.0f}%, snap {s['snap']['overshoot_pct']:.0f}%"
-                             f" | settle {s['flick']['settle_5pct_ms']:.0f} ms | (lag vs smoothed setpoint {s['flick']['tracking_lag_ms']:.1f} ms)")
+                if not af:
+                    lines.append(f"        ramp tests (typical/fast move of this pilot, a clean ramp): time shift stick→gyro "
+                                 f"{s['flick']['stick_lag_ms']:.1f}/{s['snap']['stick_lag_ms']:.1f} ms, overshoot "
+                                 f"{s['flick']['overshoot_pct']:.0f}/{s['snap']['overshoot_pct']:.0f}%, settle "
+                                 f"{s['flick']['settle_5pct_ms']:.0f} ms (no as-flown step: this analysis has no replay data)")
             vs = e["violations"]
             for v in vs[:5]:
                 lines.append(f"        violated: {v}")
@@ -778,9 +800,12 @@ def format_assessment(ass: dict) -> str:
             lines.append(f"  motor noise, all axes at the motors: {a['motor_noise']:.2f}x reference"
                          + ("".join(f"  VIOLATED: {v}" for v in a.get("noise_violations", []))))
         for n in a.get("notes", []):
-            lines.append(f"  note: {n}")
+            if n not in common:
+                lines.append(f"  note: {n}")
         for p in a.get("range_problems", []):
             lines.append(f"  RANGE: {p}")
+    for n in sorted(common):
+        lines.append(f"note (all): {n}")
     return "\n".join(lines)
 
 
@@ -807,11 +832,13 @@ def format_sweep(key: str, rows: list[dict]) -> str:
                     st += f" | as flown {af['delay_50_ms']:.1f} ms +{af['peak_pct']:.0f}%"
             wc = e.get("worst_case", {}).get("pm", "")
             lines.append(
-                f"{str(r['value']) if first else '':>8s} {r['verdict'] if first else '':7s} {ax:5s} {'ok' if not v else 'FAIL':4s}  "
+                f"{str(r['value']) if first else '':>8s} {(r['verdict'] + ('!' if r.get('hf_beyond_flown') else '')) if first else '':7s} {ax:5s} {'ok' if not v else 'FAIL':4s}  "
                 f"{_f(h['fc']):>5s}/{_f(h['pm'], '{:.0f}'):>3s}/{_f(h['ms'], '{:.2f}')}@{_f(h.get('ms_hz'), '{:.0f}'):<3s}  {_f(i['fc']):>6s}  "
                 f"{_f(fu['pm'], '{:.0f}'):>6s}°  {w['pm']:4.0f}/{w['ms']:<5.2f} [{wc:18s}] {nz:>5s}  {e['objective_db']:6.2f}  "
                 f"{(v[0] + (f' (+{len(v) - 1})' if len(v) > 1 else '')) if v else '-'}{st}")
             first = False
+        for nv in r.get("noise_violations", []):
+            lines.append(f"{'':>8s} {'':7s} all   FAIL  {nv}")
     sig = [tuple((r[ax]["hover"]["fc"], r[ax]["hover"]["ms"], r[ax]["objective_db"], r[ax]["noise_vs_safe"],
                   str(r[ax].get("worst")), str(r[ax].get("step")))
                  for ax in AXES if ax in r) for r in rows]
@@ -825,6 +852,9 @@ def format_sweep(key: str, rows: list[dict]) -> str:
         lines.append(f"note: every value gives identical results - {key} has no effect here. It may be inactive "
                      "(a notch needs its *_cutoff > 0, a static lowpass is ignored while *_dyn_min_hz > 0, tpa_low_* "
                      "needs tpa_low_always = ON, dyn idle below the natural idle), or not modelled (see `coverage`).")
+    if any(r.get("hf_beyond_flown") for r in rows):
+        lines.append("! = filtering at 1-3 kHz lighter than any flown tune: the noise prediction extrapolates there "
+                     "(only for a supervised noise-headroom flight)")
     return "\n".join(lines)
 
 
@@ -846,8 +876,10 @@ def format_grid(res: dict) -> str:
                 nz = "-" if e["noise"] is None else f"{e['noise']:.2f}"
                 af = e.get("as_flown")
                 st = f" | {af['delay_50_ms']:.1f}/{af['peak_pct']:.0f}" if af else ""
-                row += f"{'ok ' if e['ok'] else 'NO '}{_f(e['hover_ms'], '{:.2f}')}/{e['worst_pm']:.0f} {nz} {e['obj']:.2f}{st}".rjust(w)
+                row += f"{'ok' if e['ok'] else 'NO'}{'!' if c.get('hf_beyond_flown') else ' '}{_f(e['hover_ms'], '{:.2f}')}/{e['worst_pm']:.0f} {nz} {e['obj']:.2f}{st}".rjust(w)
             out.append(row)
+    if any(c.get("hf_beyond_flown") for c in res["cells"]):
+        out.append("! = filtering at 1-3 kHz lighter than any flown tune (noise prediction extrapolates; headroom flights only)")
     why = [(c[k1], c[k2], ax, e["first_violation"]) for c in res["cells"] for ax, e in c["axes"].items() if not e["ok"]]
     if why:
         out.append("\nwhy NO (first violation per cell):")
@@ -947,6 +979,8 @@ def brief(wb: Workbench) -> dict:
     model_step = (getattr(an, "extra", None) or {}).get("model_step") or {}
     lag_pairs = [f"{ax} {m['delay_50_ms']:.1f} vs {model_step[ax]['delay_50_ms']:.1f}"
                  + ("" if m.get("confidence", "good") == "good" else f" ({m.get('confidence')} confidence)")
+                 + (" GAP" if abs(m["delay_50_ms"] - model_step[ax]["delay_50_ms"])
+                    > max(1.5, 0.2 * m["delay_50_ms"]) and m.get("confidence") != "low" else "")
                  for ax, m in meas.items() if ax in model_step]
     if lag_pairs:
         summary.append("step response 50 % time, measured in the log vs model for the flown tune [ms]: " + "; ".join(lag_pairs)

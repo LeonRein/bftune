@@ -25,6 +25,7 @@ class Config:
     features: dict[str, bool] = field(default_factory=dict)
     active_profile: int = 0
     active_rateprofile: int = 0
+    profile_known: bool = False  # a `profile N` line was read (a real dump); a log header has no profile index
     firmware_version: str | None = None
     board: str | None = None
     craft_name: str | None = None
@@ -82,6 +83,7 @@ def parse_dump(text: str) -> Config:
             n = int(line.split()[1])
             section = cfg.profiles.setdefault(n, {})
             cfg.active_profile = n  # dump lists the active profile last
+            cfg.profile_known = True
             continue
         if line.startswith("rateprofile "):
             n = int(line.split()[1])
@@ -232,6 +234,7 @@ def merge(dump: Config | None, header: Config) -> Config:
         features=dump.features,
         active_profile=dump.active_profile,
         active_rateprofile=dump.active_rateprofile,
+        profile_known=dump.profile_known,
         firmware_version=dump.firmware_version or header.firmware_version,
         board=dump.board or header.board,
         craft_name=dump.craft_name or header.craft_name,

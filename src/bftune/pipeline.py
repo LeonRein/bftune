@@ -106,7 +106,7 @@ def sanity_warnings(fl: Flight, idn: Identification | None) -> list[str]:
                      "becomes relative (no worse than the flown tune). Recommend a chirp flight for the next iteration")
         for a in range(3):
             if a not in idn.axes:
-                w.append(f"no model for {AXES[a]}" + (" (no chirp on that axis)" if chirp else " (too little stick activity)")
+                w.append(f"no model for {AXES[a]}" + (" (no chirp on that axis)" if chirp else " (see the identification notes for why)")
                          + ": that axis cannot be assessed")
     return w
 
@@ -136,10 +136,17 @@ def firmware_support(version: str | None) -> tuple[str, str]:
 
 def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | None = None, plots: bool = True,
             log=print, safe_logs: list[str] | None = None, safe_cli: list[str] | None = None,
-            any_firmware: bool = False, excluded: list[tuple[float, float]] | None = None) -> Analysis:
+            any_firmware: bool = False, excluded: list[tuple[float, float]] | None = None,
+            keep_crashes: bool = False) -> Analysis:
     out.mkdir(parents=True, exist_ok=True)
     log(f"decoding {log_path} ...")
     fl = load_flight(log_path, dump_path, log_index)
+    auto_excl = []
+    if not keep_crashes:
+        from .analysis.motors import crash_windows
+
+        auto_excl = crash_windows(fl)
+        excluded = list(excluded or []) + auto_excl
     if excluded:
         from .flight import exclude
 
@@ -165,6 +172,9 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     log("building alias-aware noise model ...")
     nm = build_noise(fl, tune, idn.time_scale)
     warns = sanity_warnings(fl, idn)
+    if auto_excl:
+        warns.append("crash(es) detected and left out of the analysis: " + ", ".join(f"{a:g}-{b:g} s" for a, b in auto_excl)
+                     + " (a crash ruins identification and noise statistics; `--keep-crashes` keeps them)")
     if level != "ok":
         warns.insert(0, msg)
     bad = [b.throttle for b in nm.bands if np.max(b.calib_err) > 1.0]

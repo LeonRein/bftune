@@ -30,6 +30,22 @@ quad's logs, dump and pilot? The decisions and the rule are in `docs/knowledge-s
   warning for analyses built by an older bftune, `logged`/`on quad` instead of `current`, motor imbalance on the
   thrust scale (thrust_linear undone), resonance findings far above the control band attributed to motor lines or
   vibration, `project next-tune-dir` ignoring date headings, a stored reason shown only next to its value.
+- From simulated sessions on a synthetic whoop and 10" (cinematic and long-range pilots): idle margins count only
+  above 1 / (how long idle stretches last in the log), and a flown tune without an idle crossover no longer imposes
+  an absolute PM there (whoops: dyn idle and thrust_linear were blocked by a 1 Hz I-term artefact); motor noise is
+  judged at the motors (all axes, as the mixer adds them), so a low-noise yaw axis no longer blocks a tune; model
+  replays use exactly the windows the measurement accepted (the as-flown peak no longer jumps between candidates)
+  and the peak is taken within the response's own rise.
+- From a no-chirp beginner, a review and a flight-plan session: crashes are left out of `analyze`, `diagnose`,
+  `errspec` and `logs` automatically (a tree crash had dropped a replay fit from 87 % to 41 %); an rpm drop after
+  all three axes jolted is an `impact`, not a stall (it re-labels the 5"'s post-crash "stall" as a hit); `emit`
+  never writes a `profile N` it does not know (a log header has no profile index); `candidate --apply FILE`;
+  lint for `simplified_*` sliders left on; `sweep`/`grid` mark filtering beyond anything flown (`!`) and show
+  the total motor-noise verdict; `brief` flags a GAP between measured and modelled step; `suggest` says when noise
+  caps the gains; notes common to all assessed tunes print once; the flight-plan skill carries the firmware facts
+  about CHIRP (amplitude in deg/s on the setpoint, exponential sweep, switch-off advances the axis even when
+  aborted, blocked in failsafe/GPS rescue); the review skill sets the noise budget, uses diagnose, and says when
+  to reject a tune outright.
 - Fixes: `coherent_to_hz` is contiguous; `rules.py` uses the FF targets, no unchecked rpm-weight claim, dyn idle
   p20 within the firmware range; `motor_poles` missing from log and dump is reported.
 

@@ -4,7 +4,8 @@ An rpm collapse (one motor far below the others) has three very different causes
 - `stall`: the motor was commanded high but its rpm fell (ESC desync, prop strike, bearing) - a problem;
 - `mixer`: the mixer itself commanded the motor down (hard flips/rolls saturate the mixer; the
   diagonal pair drops to the idle floor) - normal, not a fault;
-- `crash`: the gyro pegged or the quad was disarmed shortly after - the crash explains it.
+- `crash`: the gyro pegged or the quad was disarmed shortly after - the crash explains it;
+- `impact`: all three axes jolted just before the drop - the quad hit something; check that prop and motor.
 """
 
 from __future__ import annotations
@@ -34,8 +35,17 @@ def rpm_events(fl: Flight) -> list[dict]:
             others = float(np.median(np.delete(fl.motor[a:b], m, axis=1)))
             w0, w1 = max(0, a - int(0.5 * fl.fs)), min(fl.n, b + int(0.5 * fl.fs))
             crash = gyro_max[w0:w1].max() >= 1990 or not armed[w1 - 1]  # gyro pegged at its 2000 deg/s range, or disarm
+            # the window ends where this motor's rpm starts falling (below 0.8 x the others), strictly before the drop
+            k = a
+            while k > 0 and a - k < int(0.1 * fl.fs) and fl.motor_hz[k, m] < 0.8 * max(med[k, 0], 1.0):
+                k -= 1
+            j0, j1 = max(0, k - int(0.1 * fl.fs)), max(0, k - int(0.002 * fl.fs))
+            # an external hit shakes all three axes at once just before the rpm drops (a stall disturbs mostly one)
+            impact = j1 > j0 + 2 and all(np.ptp(fl.gyro[j0:j1, k]) > 250 for k in range(3))
             if crash:
                 kind = "crash"
+            elif impact:
+                kind = "impact"
             elif cmd < 0.2 or cmd < 0.5 * others:
                 kind = "mixer"
             elif cmd >= 0.35 or cmd >= others:
@@ -48,6 +58,21 @@ def rpm_events(fl: Flight) -> list[dict]:
                         "rpm_hz": round(float(np.min(fl.motor_hz[a:b, m])), 1),
                         "others_hz": round(float(np.median(np.delete(fl.motor_hz[a:b], m, axis=1))), 1), "kind": kind})
     return sorted(out, key=lambda e: e["t"])
+
+
+def crash_windows(fl: Flight, before_s: float = 1.0, after_s: float = 3.0) -> list[tuple[float, float]]:
+    """Time windows around crashes (gyro pegged at its range, or rpm collapses classified as crash), merged."""
+    armed = fl.mode(0)
+    peg = armed & (np.max(np.abs(fl.gyro), axis=1) >= 1990)
+    times = sorted({float(t) for t in fl.t[peg]} | {e["t"] for e in rpm_events(fl) if e["kind"] == "crash"})
+    out: list[list[float]] = []
+    for t in times:
+        a, b = max(0.0, t - before_s), min(float(fl.t[-1]) + 0.01, t + after_s)
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(round(a, 2), round(b, 2)) for a, b in out]
 
 
 def motor_health(fl: Flight) -> dict:
@@ -82,11 +107,12 @@ def format_motors(name: str, events: list[dict], health: dict) -> str:
         if "rpm_per_command_spread_pct" in health:
             out.append(f"  rpm per command spread between motors: {health['rpm_per_command_spread_pct']} % "
                        "(> ~8 %: a weaker motor, bearing or prop)")
-    counts = {k: sum(e["kind"] == k for e in events) for k in ("stall", "unclear", "mixer", "crash")}
-    out.append(f"  rpm-collapse events: {counts['stall']} stall, {counts['unclear']} unclear, {counts['mixer']} mixer "
+    counts = {k: sum(e["kind"] == k for e in events) for k in ("stall", "unclear", "impact", "mixer", "crash")}
+    out.append(f"  rpm-collapse events: {counts['stall']} stall, {counts['unclear']} unclear, {counts['impact']} after an "
+               f"impact (all axes jolted first: a hit, then the motor), {counts['mixer']} mixer "
                f"(commanded down in hard moves: normal), {counts['crash']} crash")
     for e in events:
-        if e["kind"] in ("stall", "unclear"):
+        if e["kind"] in ("stall", "unclear", "impact"):
             out.append(f"    {e['kind'].upper():7s} motor {e['motor']} t={e['t']} s for {e['ms']} ms: commanded {e['command']} "
                        f"(others {e['others_command']}), rpm {e['rpm_hz']} Hz vs others {e['others_hz']} Hz, throttle {e['throttle']}")
     crash = sorted({e["t"] for e in events if e["kind"] == "crash"})

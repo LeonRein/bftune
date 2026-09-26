@@ -56,7 +56,9 @@ Load the knowledge skills when you need them. They are not preloaded:
      - efficiency and cool motors (flight time);
      - or anything in their own words.
 
-     Ask what they want *more of*, not what they dislike. A bothering symptom is welcome as extra
+     Ask what they want *more of*, not what they dislike. When the pilot uses a vague word
+     ("floaty", "mushy", "twitchy"), ask what they mean: "floaty" can be a soft stick response or a
+     quad that hangs in descents, and the fixes point in opposite directions (`bftune:diagnosis`). A bothering symptom is welcome as extra
      information, but the priorities steer the tune.
    - **Style and craft:** freestyle, race, cinematic or long range; frame size, props, cells,
      rough weight.
@@ -105,9 +107,12 @@ Load the knowledge skills when you need them. They are not preloaded:
      (`analyze LOG --dump LOG_X`); its header is the tune on the quad. The PID profile index is then
      unknown: take it from the project's older dumps and confirm it with the pilot
      (`emit --profile N`).
-   - **A crash or bench test inside a log** (`motors` prints crash times, `diagnose` →
-     `rpm_dips_explained.crash_at_s`): pass `--exclude T0:T1` to `analyze`, `diagnose`, `errspec`,
-     `logs` and `motors`, or it dominates the error spectra and the propwash statistics.
+   - **Crashes** (gyro pegged, rpm collapses in a crash) are left out of `analyze`, `diagnose`,
+     `errspec` and `logs` automatically (`analyze` warns, `diagnose` reports `crash_excluded`). Other
+     windows that don't belong (a bench test, a hard landing) go out with `--exclude T0:T1`.
+   - **Several logs without chirps** of the same tune give several freestyle models. They can
+     disagree (gain ±40 % each): assess candidates on each analysis and require PASS on all, and
+     prefer the one whose measured step matches its model (`brief`, no GAP).
    - **A dump belongs to the tune on the quad now, not necessarily to the log.** Pass it to
      `analyze` anyway. If it differs from the log's tune, the model uses the log's own settings
      (what flew), and the dump becomes "the tune on the quad now": candidates start from it,

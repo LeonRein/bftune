@@ -21,7 +21,7 @@ class FakeFlight:
 
 
 def test_stall_vs_mixer_vs_crash():
-    fl = FakeFlight()
+    fl = FakeFlight(n=6000)
     # mixer dip: motor 1 commanded down in a hard move
     fl.motor_hz[500:540, 0] = 20
     fl.motor[500:540, 0] = 0.05
@@ -32,8 +32,12 @@ def test_stall_vs_mixer_vs_crash():
     # crash: gyro pegged around a collapse of motor 3
     fl.motor_hz[3000:3100, 2] = 0
     fl.gyro[3050:3060, 0] = 2000
+    # impact: all three axes jolt before motor 4's rpm falls (a hit), no pegged gyro
+    fl.gyro[4460:4495, :] = [300.0, -300.0, 300.0]
+    fl.motor_hz[4500:4530, 3] = 5
+    fl.motor[4500:4530, 3] = 0.9
     kinds = {e["motor"]: e["kind"] for e in rpm_events(fl)}
-    assert kinds == {1: "mixer", 2: "stall", 3: "crash"}
+    assert kinds == {1: "mixer", 2: "stall", 3: "crash", 4: "impact"}
 
 
 def test_applied(tmp_path):

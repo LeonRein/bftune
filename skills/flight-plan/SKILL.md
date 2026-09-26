@@ -7,8 +7,11 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob
 
 # Flight plan for a tuning log
 
-Tailor the plan to the craft: ask for the size, cells, and whether blackbox goes to flash or SD,
-unless `quad.md` or a dump already says. Then give the pilot:
+Tailor the plan to the craft. Ask what the plan depends on, unless `quad.md` or a dump already says:
+size and cells, blackbox on flash or SD, the PID loop rate (the sample-rate fraction depends on it),
+the ESC firmware and whether bidirectional DShot is on, and whether the quad has flown yet. Record the
+answers in the quad's project folder (`bftune project init`), so the tuning session starts from them.
+Then give the pilot:
 1. a CLI setup block;
 2. the mode setup;
 3. the flying procedure;
@@ -20,9 +23,14 @@ Keep it short and concrete.
 - Betaflight 2026.6+ with **chirp support**. Cloud builds may need the custom define `USE_CHIRP`
   if the CHIRP mode is missing from the Modes tab.
 - **Modes tab:**
-  - Assign **CHIRP** to a switch. Each on→off advances the axis (roll → pitch → yaw → roll); one sweep
-    runs per switch-on and stops by itself.
-  - An **ANGLE** switch makes the chirps much easier: fly them in ANGLE at a steady hover.
+  - Assign **CHIRP** to a switch. One sweep runs per switch-on and stops by itself; every switch-off
+    advances the axis (roll → pitch → yaw → roll), **also after a sweep aborted early** (pid.c). To
+    redo an axis, fly the others or a full extra round. CHIRP is blocked in failsafe and GPS rescue.
+  - An **ANGLE** switch makes the chirps much easier: fly them in ANGLE at a steady hover. Keep GPS
+    hold modes (altitude/position hold) off during the sweeps: they add their own corrections.
+- What a chirp is, for the pilot: the flight controller adds a sine wave to the rate setpoint on one
+  axis, slow at first and exponentially faster up to the end frequency (a wobble that turns into a
+  buzz); it is normal and stops by itself.
 - Bidirectional DShot (RPM telemetry) must be on. Without it there is no motor model and no RPM
   filter; see `bftune:craft-classes`.
 
@@ -40,8 +48,13 @@ set chirp_amplitude_pitch = <class>
 set chirp_amplitude_yaw = <class>
 save
 ```
+`chirp_amplitude_*` is in **deg/s added to the rate setpoint** (0-500; firmware default 230/230/180);
+the sweep is exponential from start to end over `chirp_time_seconds`, and below 1 Hz the amplitude
+is scaled down so the angle stays bounded (common/chirp.c). Heavier, slower quads need a smaller
+amplitude to stay controllable and more time at the low end.
+
 **First chirp flight of a quad:** start from the class row *(convention: the 3.5" and 5" rows
-worked on real quads; the whoop and 7-10" rows are estimates)*:
+worked on real quads; the whoop and 7-10" rows are estimates, and 30 s suits heavy 7-10" builds)*:
 
 | class | end (deci-Hz) | roll/pitch amp | yaw amp | notes |
 |---|---|---|---|---|
@@ -93,11 +106,16 @@ pilot reports each check on the same temperature scale as before.
    for roll, pitch and yaw. **Two or three rounds** of all axes are much better than one.
 3. Then 1-2 minutes of their normal flying, covering as much of the throttle range as they are
    comfortable with: for a freestyle pilot flips, rolls, punch-outs, dives and throttle chops; for a
-   cinematic or angle-mode pilot their usual lines plus a few climbs and descents. The throttle
-   range feeds the motor and noise models, fast stick moves the measured step response, and
-   chops show propwash.
-4. Land, feel the motors (cool, warm or hot), and take a CLI `dump` (or `diff all`) without changing
-   anything.
+   cinematic or angle-mode pilot their usual lines plus a few climbs and descents; for a long-range
+   pilot cruise plus a few seconds each of a steep climb and a descent at low throttle (the idle and
+   full-throttle design cases come from there). Quick stick moves on every axis feed the measured
+   step response, chops show propwash.
+4. Land, feel the motors (cold, cool, slightly warm, warm = can't hold a finger on it for 5 s, or hot:
+   the same scale every time), and take a CLI `dump` (or `diff all`) without changing anything.
+
+A **new build that has not flown**: first a maiden hover of 30 s on the stock tune, land and touch the
+motors; stop and report if any is hot or you hear oscillation. Take a `diff all` before pasting
+anything, as the way back.
 
 ## 4. What to send back
 - the log file(s) and the dump;
