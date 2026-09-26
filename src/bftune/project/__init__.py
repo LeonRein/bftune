@@ -57,6 +57,12 @@ def init_project(path: Path, name: str | None = None) -> list[Path]:
     return made
 
 
+def latest_tune_dir(path: Path) -> Path | None:
+    tunes = Path(path) / "tunes"
+    dirs = sorted(p for p in tunes.iterdir() if p.is_dir() and p.name[:2].isdigit()) if tunes.is_dir() else []
+    return dirs[-1] if dirs else None
+
+
 def next_tune_dir(path: Path) -> Path:
     tunes = Path(path) / "tunes"
     tunes.mkdir(parents=True, exist_ok=True)

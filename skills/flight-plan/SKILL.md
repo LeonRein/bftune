@@ -29,8 +29,8 @@ Keep it short and concrete.
 ## 2. CLI block (adapt the rate to their logging device)
 ```
 set debug_mode = CHIRP
-set blackbox_sample_rate = 1/2          # fastest rate their device logs WITHOUT gaps; 1 kHz is fine
-set blackbox_high_resolution = ON       # 0.1 deg/s; turn OFF if it causes gaps
+set blackbox_sample_rate = <see below>  # fastest rate the device logs WITHOUT gaps; 1 kHz is fine
+set blackbox_high_resolution = <see below>
 set blackbox_disable_debug = OFF
 set chirp_frequency_start_deci_hz = 10
 set chirp_time_seconds = 20
@@ -49,6 +49,21 @@ save
 
 bftune handles a 1 kHz log (aliasing is modelled). Faster logs improve the noise estimate, but
 never at the cost of gaps.
+
+### Rate, resolution and storage
+Choose the settings for the logging device, and check the result with `bftune inspect`, which
+reports gaps and corrupt frames:
+- **SD card:** gaps come from a slow card.
+  - Start at 1 kHz (`1/8` at 8 kHz, `1/4` at 4 kHz) with `blackbox_high_resolution = OFF`.
+  - Try 2 kHz or high resolution only if a test log shows no gaps.
+  - Seen on a 3.5": 1 kHz with high resolution = 684 gaps (49 s lost); without it, 0 gaps.
+- **Onboard flash** (often 16 MB): nothing drops, but the flash fills up.
+  - About 280 s fit at 2 kHz with high resolution, which is one pack; erase before each flight.
+  - For a chirp flight, high resolution matters more than the rate: use 1 kHz + high resolution.
+  - For long freestyle logs, use 2 kHz or 1 kHz without high resolution.
+- Ask which device they have if the dump does not show it (`blackbox_device`).
+- Remind them that `blackbox_high_resolution` falls back to its default if a `diff all` restore or a
+  reflash drops it.
 
 ## 3. Flying
 1. Take off, and hover in ANGLE with steady throttle, preferably in calm air and away from the ground.

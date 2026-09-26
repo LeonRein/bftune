@@ -3,6 +3,11 @@
 # plugin is enabled. Runs the Python package bundled with the plugin through uv (installs the
 # dependencies into a cached environment on first use), or falls back to an installed bftune.
 here="$(cd "$(dirname "$0")/.." && pwd)"
+# uv is often installed in the user's home but not on the agent shell's PATH
+for d in "$HOME/.local/bin" "$HOME/.cargo/bin" "/opt/homebrew/bin" "/usr/local/bin"; do
+    case ":$PATH:" in *":$d:"*) ;; *) [ -x "$d/uv" ] && PATH="$PATH:$d" ;; esac
+done
+export PATH
 if command -v uv >/dev/null 2>&1; then
     exec uv run --quiet --frozen --project "$here" bftune "$@"
 fi
@@ -11,5 +16,9 @@ for py in python3 python; do
         exec "$py" -m bftune "$@"
     fi
 done
-echo "bftune: needs 'uv' (https://docs.astral.sh/uv/) or an installed bftune package (pip install $here)" >&2
+cat >&2 <<EOF
+bftune: needs 'uv' (https://docs.astral.sh/uv/). Install it for the current user, without sudo:
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+(Windows: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"). Then run bftune again.
+EOF
 exit 127

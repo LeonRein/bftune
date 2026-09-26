@@ -30,6 +30,20 @@ flew, towards a safe-log reference. References:
 error, non-RPM peaks (apparent frequency, **persistent** across bands or not), the safe level and the
 candidate.
 
+## Noise-headroom flight (when the budget is what limits the quad)
+The budget only knows tunes that have flown. If every flown tune ran **cold**, the real limit is
+unknown and may be far higher. On the reference 3.5" a tune with 4-5× the D-term noise still flew
+cool. When the budget is the binding limit, and the pilot wants more:
+1. Build a candidate with lighter filtering: dyn notch off or fewer notches, a D-term LPF opened up
+   one step, RPM filter at a lower Q. Keep the gains that pass on the model, at predicted noise of
+   about 1.3-1.6× the reference (`--noise-budget 1.6` for that assess/emit only). Say plainly
+   that this is an experiment.
+2. The flight protocol: hover 30 s, land, touch the motors. Then one minute of normal flying, land,
+   touch them again. Stop if any motor is too hot to hold a finger on.
+3. If they stay cool or only slightly warm, add that log as `--safe-log`. It is now a proven
+   reference, and the next iteration may use the headroom (more D, thrust_linear, a lighter layout).
+Never do this without the pilot's agreement or on a quad with a known hardware issue.
+
 ## Filters and D are coupled
 A stronger D-term filter allows more D inside the budget. So compare layouts *at their
 noise-limited best gains*: one candidate file per layout, then `bftune suggest -o A v1.txt v2.txt v3.txt`

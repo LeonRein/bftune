@@ -57,7 +57,9 @@ Load the knowledge skills when you need them. They are not preloaded:
    Also ask, in the same message, what they dislike about each tune, and about props, weight and
    anything changed since the logs.
 
-   Record the answers in `quad.md` (facts) and `history.md` (impressions, quoted).
+   Record the answers in `quad.md` (facts) and `history.md` (impressions, quoted). Fill in the
+   template's own fields (Hardware, Pilot, Constraints) rather than appending a separate list, and
+   keep them current.
 
    Proceed on assumptions only if the pilot said they can't answer. Use these defaults and list
    them in your answer and in `history.md`:
@@ -192,6 +194,27 @@ Follow `bftune:deliver`:
   (from the coverage table), so the pilot sees that nothing was skipped;
 - append the iteration to `history.md`.
 
+When the pilot says they pasted it (or sends a new dump), check it with
+`bftune applied tune_cli.txt NEW_DUMP --old PREVIOUS_DUMP`. It shows missing lines, the wrong profile,
+and settings that changed by accident (e.g. `blackbox_high_resolution` reset to its default).
+
+## Know when to stop
+Tune for what the pilot can feel. Rough thresholds for a noticeable difference:
+- stick lag: about 1 ms or more;
+- hover or idle Ms: about 0.2 or more;
+- crossover: about 15 % or more;
+- errspec bands: about 3 dB or more;
+- motor noise: about 15 % (heat).
+
+Changes below all of these are not worth a flight. Say so, and stop or ask what the pilot wants
+next, when:
+- the pilot is happy and the data shows nothing to fix;
+- the remaining knobs sit at a limit (Ms at 2.0, noise at the budget);
+- or the last iteration was already below these thresholds.
+
+When the noise budget is what limits the quad and its motors come down cold, the next real step is a
+**noise-headroom flight** (`bftune:filters-noise`), not more fine-tuning.
+
 ## 6. Learn from the flight
 
 When the pilot comes back with their impressions or new logs, continue with `bftune:feedback`.
@@ -203,7 +226,8 @@ If the pilot can't answer, record the issue prominently and continue only where 
 findings never block a *conservative* tune, but they do block an aggressive one.
 - A gate in `analyze` fails (filter-chain check, closed-loop error, implausible plant for the craft class).
 - A `diagnose` problem that tuning cannot fix:
-  - repeated desyncs;
+  - a real motor stall (`motor_stall` in `diagnose`; review with `bftune motors`). The `mixer`
+    dips in hard flips are normal;
   - motor imbalance above about 30 % (bent prop, bad motor). Below that it is usually CG or trim:
     tell the pilot the direction `diagnose` reports and continue;
   - saturation at part throttle (overweight or weak motors);

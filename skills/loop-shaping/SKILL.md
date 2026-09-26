@@ -16,11 +16,15 @@ user-invocable: false
 
   | | nominal | robust variants |
   |---|---|---|
-  | PM | ≥ 45° | ≥ 35° |
+  | PM | ≥ 42° (race 40°, cinematic 50°) | ≥ 35° |
   | GM | ≥ 6 dB | ≥ 4 dB |
   | Ms | ≤ 2.0 | ≤ 2.4 |
   | motor noise | ≤ 0.9 × proven-safe | |
 
+- **Idle limits relative to the flown tune.** At very low rpm the motor lag is extrapolated, and some
+  quads (large props, low idle) can't reach the idle design limits at all. When the tune that flew
+  already misses them, the idle cases only require "no worse than the flown tune" (`assess` notes
+  this). Judge idle by improvement then, and never chase the absolute idle limits with P/I cuts.
 - **The worst-case label points to the knob:**
   - `full/…` → TPA;
   - `idle/…` → D, thrust_linear, dyn idle;
@@ -59,7 +63,10 @@ noise-limited well below the damping optimum. If P/D already sit at the Ms limit
 sensitivity peak (the crossover moves into the delay region). Then keep d_max = D.
 
 ## High and low throttle
-- **TPA:** the plant gain grows with rpm, so full throttle has the least margin. Choose `tpa_rate`
+- **TPA:** the plant gain grows with rpm, so full throttle has the least margin. Prefer
+  `tpa_mode PD`: on a 5", D-only TPA made full throttle *worse*, because D supplies the phase lead
+  there. The full-throttle authority ratio can differ between logs of the same quad (1.3-1.7 seen),
+  so keep a few degrees of slack on the full cases. Choose `tpa_rate`
   and `tpa_breakpoint` so that `full/*` no longer sets the worst case. Use `tpa_mode PD` when P also
   needs cutting there. Keep the breakpoint above hover.
 - **`thrust_linear`:** raises low-throttle authority (propwash) and lowers high-throttle gain. It

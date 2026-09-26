@@ -57,8 +57,12 @@ class Goals:
     @classmethod
     def for_style(cls, style: str, noise_budget: float | None = None) -> Goals:
         g = cls(style=style)
-        if style == "race":
-            g.ms_max, g.pm_min, g.perf_band, g.idle_weight = 2.1, 42.0, (5.0, 80.0), 0.3
+        if style == "freestyle":
+            # Ms <= 2.0 is the propwash-relevant limit; flown tunes that pilots rated "feels good" sat at hover
+            # PM 42-47 deg with Ms <= 2.0 (3.5" and 5", 2026-09), so the nominal PM floor is 42 deg
+            g.pm_min = 42.0
+        elif style == "race":
+            g.ms_max, g.pm_min, g.perf_band, g.idle_weight = 2.1, 40.0, (5.0, 80.0), 0.3
             g.i_over_p = (1.7, 1.7, 1.7)
         elif style == "cinematic":
             g.ms_max, g.pm_min, g.perf_band, g.idle_weight, g.noise_budget = 1.7, 50.0, (2.0, 40.0), 0.8, 0.8
@@ -75,6 +79,7 @@ class Case:
     plant_structure: str
     weight: float  # objective weight (0 = constraint only)
     robust: bool  # True: relaxed limits (uncertainty variant)
+    limits: dict | None = None  # per-case override {"pm", "gm", "ms"} (idle cases relative to the flown tune)
 
 
 @dataclass
@@ -234,9 +239,8 @@ class AxisProblem:
             L = kp * gp + ki * gi + kd_eff * gd
             M = metrics(self.f, L)
             # small internal safety margin so integer rounding cannot push the result over a limit
-            pm_min = (g.pm_min_robust if c.robust else g.pm_min) + 1.5
-            gm_min = (g.gm_min_robust_db if c.robust else g.gm_min_db) + 0.3
-            ms_max = (g.ms_max_robust if c.robust else g.ms_max) - 0.04
+            lim = case_limits(c, g)
+            pm_min, gm_min, ms_max = lim["pm"] + 1.5, lim["gm"] + 0.3, lim["ms"] - 0.04
             if not np.isfinite(M.pm):
                 # no gain crossover: loop gain < 1 everywhere (no authority) or > 1 everywhere
                 pm = 90.0 if np.max(np.abs(L)) < 1 else -90.0
@@ -267,7 +271,8 @@ class AxisProblem:
             if not c.robust:
                 worst["dm"] = min(worst["dm"], M.dm_ms)
             if detail:
-                rows.append({"case": c.label, "robust": c.robust, **M.as_dict(), "pm_eff": pm})
+                rows.append({"case": c.label, "robust": c.robust, **M.as_dict(), "pm_eff": pm, "limits": lim,
+                             "relaxed": c.limits is not None})
         obj /= max(wsum, 1e-9)
         if self.axis < 2 and P > 0 and D > 0:
             r = D / P
@@ -516,14 +521,22 @@ def multi_start_search(fl, idn, nm, tune0: Tune, goals: Goals, seeds: dict[str, 
     return best, results
 
 
+def case_limits(c, g: Goals) -> dict:
+    """PM/GM/Ms limits of a case: the design goals, or the case's own override."""
+    base = {"pm": g.pm_min_robust if c.robust else g.pm_min, "gm": g.gm_min_robust_db if c.robust else g.gm_min_db,
+            "ms": g.ms_max_robust if c.robust else g.ms_max}
+    return {**base, **(c.limits or {})}
+
+
 def violations(rows: list[dict], goals: Goals, noise_ratio: float | None = None) -> list[str]:
     """Human-readable list of violated constraints for one axis (empty = all met)."""
     out = []
     for r in rows:
         rob = r.get("robust", False)
-        pm_min = goals.pm_min_robust if rob else goals.pm_min
-        gm_min = goals.gm_min_robust_db if rob else goals.gm_min_db
-        ms_max = goals.ms_max_robust if rob else goals.ms_max
+        lim = r.get("limits") or {}
+        pm_min = lim.get("pm", goals.pm_min_robust if rob else goals.pm_min)
+        gm_min = lim.get("gm", goals.gm_min_robust_db if rob else goals.gm_min_db)
+        ms_max = lim.get("ms", goals.ms_max_robust if rob else goals.ms_max)
         pm = r.get("pm_eff", r["pm"])
         bad = []
         if pm < pm_min - 0.5:
@@ -533,7 +546,7 @@ def violations(rows: list[dict], goals: Goals, noise_ratio: float | None = None)
         if r["ms"] > ms_max + 0.02:
             bad.append(f"Ms {r['ms']:.2f}>{ms_max:.1f}")
         if bad:
-            out.append(f"{r['case']}: " + ", ".join(bad))
+            out.append(f"{r['case']}: " + ", ".join(bad) + (" (limit = flown tune)" if r.get("relaxed") else ""))
     if noise_ratio is not None and noise_ratio > goals.noise_budget + 1e-6:
         out.append(f"motor noise {noise_ratio:.2f}x proven-safe level (limit {goals.noise_budget:.2f}x)")
     return out

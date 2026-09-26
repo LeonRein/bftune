@@ -58,5 +58,8 @@ def test_workbench_session_on_synthetic_quad(tmp_path: Path):
     assert not any("dmax" in c.label for c in wb.axis_problem(off, 0).cases)
     from bftune.coverage import coverage
     assert any(r["changed"] for r in coverage(wb.logged, off))
+    g = wb.grid(base, "p_roll", [30, 40], "d_roll", [20, 30])
+    assert len(g["cells"]) == 4 and set(g["cells"][0]["axes"]) == {"roll"}
+    assert any("D-max never engages" in n for n in wb.lint(off))
     res = wb.emit(base, {}, log=lambda *_: None)
     assert (out / "tune_cli.txt").exists() and (out / "report.md").exists() and res["verdict"] in ("PASS", "FAIL")

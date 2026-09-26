@@ -161,16 +161,44 @@ def cmd_assess(a) -> int:
     return 0
 
 
+def _pairs(items: list[str], what: str) -> list[tuple[str, list]]:
+    from .workbench import parse_values
+
+    if len(items) % 2:
+        raise SystemExit(f"{what}: expected KEY VALUES pairs, got {items!r} (e.g. d_roll 20:50:5 p_roll 30,40,50)")
+    out = []
+    for k, v in zip(items[::2], items[1::2]):
+        vals = [x for x in parse_values(v) if str(x).strip() != ""]
+        if not vals:
+            raise SystemExit(f"{what}: no values given for {k} (got {v!r}); e.g. 20:50:5 or 100,120,140")
+        out.append((k, vals))
+    return out
+
+
 def cmd_sweep(a) -> int:
-    from .workbench import format_sweep, parse_values
+    from .workbench import format_sweep
 
     wb = _wb(a)
     base, _ = wb.load(a.file)
-    vals = [v for v in parse_values(a.values) if str(v).strip() != ""]
-    if not vals:
-        raise SystemExit(f"sweep: no values given for {a.key} (got {a.values!r}); e.g. 20:50:5 or 100,120,140")
-    rows = wb.sweep(base, a.key, vals, steps=a.steps)
-    print(json.dumps(rows, indent=1, default=float) if a.json else format_sweep(a.key, rows))
+    res = {}
+    for key, vals in _pairs(a.pairs, "sweep"):
+        rows = wb.sweep(base, key, vals, steps=a.steps)
+        res[key] = rows
+        if not a.json:
+            print(format_sweep(key, rows) + "\n")
+    if a.json:
+        print(json.dumps(res if len(res) > 1 else next(iter(res.values())), indent=1, default=float))
+    return 0
+
+
+def cmd_grid(a) -> int:
+    from .workbench import format_grid
+
+    wb = _wb(a)
+    base, _ = wb.load(a.file)
+    (k1, v1), (k2, v2) = _pairs([a.key1, a.values1, a.key2, a.values2], "grid")
+    res = wb.grid(base, k1, v1, k2, v2)
+    print(json.dumps(res, indent=1, default=float) if a.json else format_grid(res))
     return 0
 
 
@@ -229,6 +257,13 @@ def cmd_project(a) -> int:
     if a.action == "init":
         made = init_project(Path(a.path), a.name)
         print(f"project at {Path(a.path).resolve()}: " + (", ".join(p.name for p in made) + " created" if made else "exists"))
+    elif a.action == "latest-tune-dir":
+        from .project import latest_tune_dir
+
+        d = latest_tune_dir(Path(a.path))
+        if d is None:
+            raise SystemExit("no tune folder yet: use `bftune project next-tune-dir`")
+        print(d)
     else:
         d = next_tune_dir(Path(a.path))
         d.mkdir(parents=True, exist_ok=True)
@@ -246,10 +281,34 @@ def cmd_coverage(a) -> int:
     return 0
 
 
+def cmd_motors(a) -> int:
+    from .analysis.motors import format_motors, motor_health, rpm_events
+    from .flight import load_flight
+
+    res = {}
+    for p in a.logs:
+        fl = load_flight(p)
+        ev, h = rpm_events(fl), motor_health(fl)
+        res[p] = {"events": ev, "health": h}
+        if not a.json:
+            print(format_motors(p, ev, h))
+    if a.json:
+        print(json.dumps(res, indent=1, default=float))
+    return 0
+
+
+def cmd_applied(a) -> int:
+    from .tunes import applied, format_applied
+
+    res = applied(a.tune_cli, a.new_dump, a.old)
+    print(json.dumps(res, indent=1) if a.json else format_applied(res))
+    return 0 if not res["not_applied"] and res["profile_ok"] else 1
+
+
 def cmd_tunes(a) -> int:
     from .tunes import format_tunes, group_tunes
 
-    res = group_tunes(a.logs, a.dump)
+    res = group_tunes(a.logs, a.dump, [k.strip() for k in a.keys.split(",")] if a.keys else None)
     print(json.dumps(res, indent=1) if a.json else format_tunes(res))
     return 0
 
@@ -258,15 +317,30 @@ def cmd_errspec(a) -> int:
     from .analysis.errspec import error_spectrum
     from .flight import load_flight
 
-    res = {Path(p).name: error_spectrum(load_flight(p)) for p in a.logs}
+    splits = [None] if a.by_throttle is None else [(0.0, a.by_throttle), (a.by_throttle, 1.01)]
+    fls = {Path(p).name: load_flight(p) for p in a.logs}
+    res = {}
+    for sp in splits:
+        tag = "" if sp is None else f" thr {'<' if sp[0] == 0 else '>='}{a.by_throttle:.2f}"
+        for name, fl in fls.items():
+            res[name + tag] = error_spectrum(fl, throttle=sp)
+    if a.json:
+        print(json.dumps(res, indent=1, default=float))
+        return 0
     first = next(iter(res.values()))
     print("free-flight tracking error (setpoint - gyro) PSD [dB (deg/s)^2/Hz] per band, acro windows only")
-    print(f"{'log':24s} {'axis':5s} " + " ".join(f"{b:>7s}" for b in first["bands"]))
+    print(f"{'log':30s} {'axis':5s} " + " ".join(f"{b:>7s}" for b in first["bands"]))
     for name, r in res.items():
         for ax, vals in r["axes"].items():
-            print(f"{name[:24]:24s} {ax:5s} " + " ".join(f"{v:7.1f}" for v in vals) + f"   ({r['windows']} windows)")
-    print("A bump at 30-60 Hz = sensitivity peak (propwash wobble); higher 5-30 Hz = weaker rejection. Pilot inputs differ")
-    print("between flights, so compare shapes and large differences (>3 dB), not small ones.")
+            print(f"{name[:30]:30s} {ax:5s} " + " ".join(f"{v:7.1f}" for v in vals) + f"   ({r['windows']} windows)")
+    print("\nhow hard each flight was flown (compare spectra only between similar flights):")
+    for name, r in res.items():
+        act = r.get("activity")
+        if act:
+            print(f"  {name[:30]:30s} stick RMS r/p/y {act['stick_rms_deg_s']} deg/s, throttle p25/50/75 "
+                  f"{act['throttle_p25_p50_p75']}, motor saturation {act['motor_saturation_pct']} %")
+    print("A bump at 30-60 Hz = sensitivity peak (propwash wobble); higher 5-30 Hz = weaker rejection. A flat shift in every")
+    print("band with more stick activity is flying style, not the tune. Compare shapes and large differences (>3 dB).")
     return 0
 
 
@@ -408,7 +482,7 @@ def main(argv: list[str] | None = None) -> int:
     s.set_defaults(fn=cmd_brief)
 
     s = sub.add_parser("project", help="per-quad project folder: init | next-tune-dir")
-    s.add_argument("action", choices=["init", "next-tune-dir"])
+    s.add_argument("action", choices=["init", "next-tune-dir", "latest-tune-dir"])
     s.add_argument("path")
     s.add_argument("--name")
     s.set_defaults(fn=cmd_project)
@@ -419,14 +493,31 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_coverage)
 
+    s = sub.add_parser("motors", help="motor health: rpm-collapse events classified (stall / mixer / crash), "
+                                      "rpm per command, telemetry jitter")
+    s.add_argument("logs", nargs="+")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_motors)
+
+    s = sub.add_parser("applied", help="check a dump taken after pasting: is the delivered CLI on the quad, "
+                                       "what else changed (--old = the dump before)")
+    s.add_argument("tune_cli")
+    s.add_argument("new_dump")
+    s.add_argument("--old", help="the dump from before the tune was pasted")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_applied)
+
     s = sub.add_parser("tunes", help="group logs by the tune they flew (headers only, instant); check a dump against them")
     s.add_argument("logs", nargs="+")
     s.add_argument("--dump", help="CLI dump/diff to match against the logs' tunes")
+    s.add_argument("--keys", help="comma list of settings to show per log (e.g. p_pitch,tpa_rate,feedforward_averaging)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_tunes)
 
     s = sub.add_parser("errspec", help="free-flight tracking-error spectrum of one or more logs (pilot cross-check)")
     s.add_argument("logs", nargs="+")
+    s.add_argument("--by-throttle", type=float, metavar="T", help="split each log at this throttle (e.g. 0.35)")
+    s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_errspec)
 
     s = sub.add_parser("safe", help="list proven-safe tunes, or add them (logs or CLI diffs) to an existing analysis")
@@ -452,14 +543,25 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_assess)
 
-    s = sub.add_parser("sweep", help="tradeoff table: vary one setting on top of a candidate")
+    s = sub.add_parser("sweep", help="tradeoff tables: vary one setting at a time on top of a candidate "
+                                     "(several KEY VALUES pairs = several independent sweeps)")
     _wb_args(s)
     s.add_argument("file")
-    s.add_argument("key", help="CLI setting name, e.g. d_roll, dterm_lpf2_static_hz, tpa_rate")
-    s.add_argument("values", help="start:stop:step or comma list (';' list for array values)")
+    s.add_argument("pairs", nargs="+", metavar="KEY VALUES",
+                   help="setting name and values: start:stop:step, comma list, ';' list for arrays. Repeat pairs.")
     s.add_argument("--steps", action="store_true", help="include stick-response metrics (slower)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_sweep)
+
+    s = sub.add_parser("grid", help="two settings at once (e.g. P x D): verdict, hover Ms, worst PM, noise, objective")
+    _wb_args(s)
+    s.add_argument("file")
+    s.add_argument("key1")
+    s.add_argument("values1")
+    s.add_argument("key2")
+    s.add_argument("values2")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_grid)
 
     s = sub.add_parser("suggest", help="per-axis P/I/D/d_max proposal with everything else fixed")
     _wb_args(s)

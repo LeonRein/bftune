@@ -45,7 +45,7 @@ def log_tunes(paths: list[str]) -> list[tuple[str, dict[str, str], dict[str, str
     return out
 
 
-def group_tunes(paths: list[str], dump: str | None = None) -> dict:
+def group_tunes(paths: list[str], dump: str | None = None, show: list[str] | None = None) -> dict:
     sessions = log_tunes(paths)
     groups: list[TuneGroup] = []
     for name, vals, _ in sessions:
@@ -61,6 +61,8 @@ def group_tunes(paths: list[str], dump: str | None = None) -> dict:
     res = {"groups": [{"tune": g.label, "sessions": g.sessions} for g in groups],
            "differences": {k: {g.label: g.values.get(k) for g in groups} for k in differ},
            "sessions": {n: f for n, _, f in sessions}}
+    if show:
+        res["values"] = {n: {k: v.get(k) for k in show} for n, v, _ in sessions}
     if dump:
         d = load_dump(dump).values
         match = []
@@ -87,6 +89,12 @@ def format_tunes(res: dict) -> str:
         out.append("  settings that differ between the tunes:")
         for k, v in res["differences"].items():
             out.append(f"    {k:28s} " + "  ".join(f"{t}={x}" for t, x in v.items()))
+    if "values" in res:
+        names = list(res["values"])
+        out.append("  requested settings per log:")
+        out.append("    " + " " * 28 + "".join(f"{n[:18]:>20s}" for n in names))
+        for k in next(iter(res["values"].values())):
+            out.append(f"    {k:28s}" + "".join(f"{str(res['values'][n][k]):>20s}" for n in names))
     if "dump" in res:
         d = res["dump"]
         if d["matches"]:
@@ -99,4 +107,52 @@ def format_tunes(res: dict) -> str:
             for k, v in list(d["differences_to_closest"].items())[:12]:
                 out.append(f"    {k:28s} log {v['log']} -> dump {v['dump']}")
     out.append("(debug 96 = CHIRP. Ask the pilot which tune is on the quad now and how warm the motors got with each.)")
+    return "\n".join(out)
+
+
+def applied(tune_cli: str, new_dump: str, old_dump: str | None = None) -> dict:
+    """Did the pilot paste the delivered CLI? Compares its `set` lines with a dump taken afterwards, and
+    lists every other difference between the old and new dump (settings changed by hand or reset)."""
+    import re
+
+    want, profile = {}, None
+    for line in Path(tune_cli).read_text().splitlines():
+        m = re.match(r"^\s*profile\s+(\d+)", line)
+        if m:
+            profile = int(m.group(1))
+        m = re.match(r"^\s*set\s+(\S+)\s*=\s*(.*?)\s*$", line)
+        if m:
+            want[m.group(1)] = m.group(2)
+    new = load_dump(new_dump)
+    missing = {k: {"delivered": v, "on_quad": new.values.get(k)} for k, v in want.items()
+               if _norm(new.values.get(k, "<default>")) != _norm(v)}
+    res = {"delivered_settings": len(want), "not_applied": missing,
+           "active_profile": new.active_profile, "profile_in_cli": profile,
+           "profile_ok": profile is None or profile == new.active_profile}
+    if old_dump:
+        old = load_dump(old_dump)
+        keys = set(old.values) | set(new.values)
+        other = {k: {"old": old.values.get(k), "new": new.values.get(k)} for k in sorted(keys)
+                 if k not in want and _norm(old.values.get(k, "")) != _norm(new.values.get(k, ""))}
+        res["other_changes"] = other
+    return res
+
+
+def format_applied(res: dict) -> str:
+    out = []
+    if not res["not_applied"]:
+        out.append(f"all {res['delivered_settings']} delivered settings are on the quad")
+    else:
+        out.append(f"{len(res['not_applied'])} of {res['delivered_settings']} delivered settings are NOT on the quad:")
+        out += [f"    {k:30s} delivered {v['delivered']:>12s}   on quad {v['on_quad'] or '(default)'}"
+                for k, v in res["not_applied"].items()]
+        out.append("  (a `diff all` omits settings at their default: 'None' can mean the default value)")
+    if not res["profile_ok"]:
+        out.append(f"WARNING: the CLI targeted profile {res['profile_in_cli']} but profile {res['active_profile']} is active")
+    if "other_changes" in res:
+        oc = res["other_changes"]
+        out.append(f"{len(oc)} other setting(s) changed between the old and new dump (not part of the tune):" if oc
+                   else "no other settings changed between the old and new dump")
+        out += [f"    {k:30s} {v['old'] if v['old'] is not None else '(default)'} -> "
+                f"{v['new'] if v['new'] is not None else '(default)'}" for k, v in oc.items()]
     return "\n".join(out)

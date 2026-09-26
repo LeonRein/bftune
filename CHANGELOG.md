@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.0
+From reviewing two full real sessions (3.5" and 5", 2026-09-26, 214 tool calls): every custom script the agents had
+to write became an instrument, and the gate no longer blocks quads it was wrong for.
+- **Idle limits relative to the flown tune.** When the tune that flew already misses the idle design limits (large
+  props, low idle, motor lag extrapolated at very low rpm), the idle cases require "no worse than the flown tune".
+  The 5" was delivered twice with emit FAIL for this reason, and `suggest` chased the unreachable idle gate (P 22-24).
+- Freestyle nominal hover PM floor 42 deg (race 40): tunes pilots rated "feels good" sat at PM 42-47 with Ms <= 2.0.
+- New `bftune motors`: rpm collapses classified as stall (commanded up), mixer (commanded down in hard moves) or
+  crash; rpm per command per motor, telemetry jitter. `diagnose` reports `motor_stall` only for real stalls
+  (the old `possible_desync` fired on normal mixer saturation).
+- Low-throttle resonance findings say whether the peak sits at the idle motor frequency and whether a motor line
+  survives into the filtered gyro (order tracking). `assess` lints `rpm_filter_min_hz` above the idle motor frequency
+  (incl. the dyn idle floor), a TPA breakpoint below hover, and a D-max that can never engage.
+- New `bftune grid` (two settings at once); `sweep` takes several KEY VALUES pairs; `bftune applied` checks a dump
+  after pasting (missing lines, wrong profile, settings reset by accident); `tunes --keys` shows settings per log;
+  `errspec` reports flying intensity and `--by-throttle`; `project latest-tune-dir`.
+- The plugin launcher finds uv in ~/.local/bin and ~/.cargo/bin and prints the install command otherwise.
+- Skills: storage-aware logging (SD gaps with high resolution, flash capacity), a noise-headroom flight protocol,
+  a "know when to stop" rule with perceptibility thresholds, `bftune applied` after pasting, motor reviews,
+  D-only TPA lesson, no parallel tool calls that wait on each other.
+
 ## 0.5.0
 From reviewing a real session on six logs of one quad:
 - **Dumps that belong to another tune.** When a dump contradicts the log header on tuning settings, the model now

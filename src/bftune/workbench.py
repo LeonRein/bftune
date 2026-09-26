@@ -81,7 +81,12 @@ def apply_setting(t: Tune, key: str, value) -> Tune:
 
 
 def parse_candidate(base: Tune, text: str) -> tuple[Tune, dict[str, str]]:
-    """Apply `set` lines on top of `base`; returns (tune, {key: inline reason})."""
+    """Apply `set` lines on top of `base`; returns (tune, {key: inline reason}).
+    `text` may also be the path of a candidate file (API convenience; see also Workbench.load)."""
+    if isinstance(base, (str, Path)) and isinstance(text, Tune):  # tolerate swapped arguments
+        base, text = text, base
+    if "\n" not in str(text) and "set " not in str(text) and Path(str(text)).is_file():
+        text = Path(str(text)).read_text()
     t = base.copy()
     reasons: dict[str, str] = {}
     for line in text.splitlines():
@@ -191,12 +196,45 @@ class Workbench:
             out[name] = {k: round(float(m[k]), 2) for k in ("tracking_lag_ms", "stick_lag_ms", "overshoot_pct", "settle_5pct_ms")}
         return out
 
-    def axis_problem(self, tune: Tune, axis: int) -> AxisProblem:
+    def axis_problem(self, tune: Tune, axis: int, relax_idle: bool = True) -> AxisProblem:
         cases = build_cases(self.src, self.idn, tune, axis, self.goals)
+        if relax_idle:
+            self._relax_idle_cases(axis, cases)
         prob = AxisProblem(tune, axis, cases, self.idn, self.src.loop_hz, self.an.nm, self.goals,
                            self.noise_ref.get(axis) if self.noise_ref else None)
         prob.anchor = (self.logged.i(f"p_{AXES[axis]}"), self.logged.i(f"d_{AXES[axis]}"))
         return prob
+
+    def _flown_rows(self, axis: int) -> dict:
+        """Per-case metrics of the tune that flew (the log's tune), with the plain design limits."""
+        cache = self.__dict__.setdefault("_flown_rows_cache", {})
+        if axis not in cache:
+            t, ax = self.logged, AXES[axis]
+            d = t.i(f"d_{ax}")
+            prob = self.axis_problem(t, axis, relax_idle=False)
+            rows = prob.evaluate(t.i(f"p_{ax}"), t.i(f"i_{ax}"), d, t.i(f"d_max_{ax}") / d if d > 0 else 1.0, detail=True)[5]
+            cache[axis] = {r["case"]: r for r in rows}
+        return cache[axis]
+
+    def _relax_idle_cases(self, axis: int, cases: list) -> None:
+        """Idle is where the model is least certain (motor lag extrapolated at very low rpm) and where some
+        quads cannot reach the design limits at all. If the tune that flew already misses them at idle, the
+        idle limit becomes 'no worse than the flown tune' (it flew, so it is acceptable)."""
+        from .optimize.search import case_limits
+
+        flown = self._flown_rows(axis)
+        for c in cases:
+            if not c.label.startswith("idle"):
+                continue
+            ref = flown.get(c.label) or flown.get(c.label.replace("/dmax", "/d"))
+            if ref is None:
+                continue
+            lim = case_limits(c, self.goals)
+            pm0 = ref.get("pm_eff", ref["pm"])
+            if pm0 >= lim["pm"] and ref["gm_db"] >= lim["gm"] and ref["ms"] <= lim["ms"]:
+                continue  # the flown tune meets the design limits here: keep them
+            c.limits = {"pm": min(lim["pm"], pm0 - 2.0), "gm": min(lim["gm"], ref["gm_db"] - 0.5),
+                        "ms": max(lim["ms"], ref["ms"] * 1.05 + 0.02)}
 
     def assess_axis(self, tune: Tune, axis: int, steps: bool = True) -> dict:
         ax = AXES[axis]
@@ -226,6 +264,7 @@ class Workbench:
             "worst_case": dict(getattr(prob, "worst_case", {})),
             "noise_vs_safe": round(float(nr), 3) if prob.noise_Q is not None and self.noise_ref else None,
             "coherent_to_hz": round(self.idn.axes[axis].coherent_to_hz, 1),
+            "idle_limits_from_flown": any(r.get("relaxed") for r in rows),
         }
         if steps:
             res["step"] = self.step_metrics(tune, axis)
@@ -283,6 +322,26 @@ class Workbench:
                 out.append(f"{c}: " + ", ".join(bad) + " (relative gate: no chirp)")
         return out
 
+    def lint(self, tune: Tune) -> list[str]:
+        """Setting combinations the linear model can't score but real quads show (from flown logs)."""
+        out = []
+        floor = tune.i("dyn_idle_min_rpm") * 100 / 60.0
+        idle = max(self.src.idle_hz(10), floor)
+        rmin = tune.i("rpm_filter_min_hz")
+        if tune.i("rpm_filter_harmonics") > 0 and tune.s("dshot_bidir") != "OFF" and rmin > 0.95 * idle:
+            out.append(f"rpm_filter_min_hz {rmin} is above the idle motor frequency (~{idle:.0f} Hz"
+                       + (f", dyn idle floor {floor:.0f} Hz" if floor > self.src.idle_hz(10) else "")
+                       + "): the motor fundamental at low throttle is not notched. It can show up as a low-throttle "
+                       f"error peak near {idle:.0f} Hz (`diagnose`). Consider rpm_filter_min_hz ~{max(50, int(idle * 0.9 / 5) * 5)} "
+                       "(a notch near the idle crossover costs ~1 deg of idle PM: check with `sweep`).")
+        bp = tune.i("tpa_breakpoint")
+        hover_thr = float(np.mean([ai.op.throttle for ai in self.idn.axes.values()])) if self.idn.axes else 0.3
+        if 1000 + 1000 * hover_thr > bp and tune.i("tpa_rate") > 0:
+            out.append(f"tpa_breakpoint {bp} is below hover (~{1000 + 1000 * hover_thr:.0f}): TPA already cuts gains at hover.")
+        if tune.i("d_max_roll") > tune.i("d_roll") and tune.i("d_max_gain") == 0 and tune.i("d_max_advance") == 0:
+            out.append("d_max > d but d_max_gain and d_max_advance are 0: D-max never engages (set d_max = d or enable a driver).")
+        return out
+
     def assess(self, tune: Tune, steps: bool = True, axes=None) -> dict:
         from .emit.cli import changed_keys
         from .model.params import validate
@@ -309,6 +368,11 @@ class Workbench:
             if fc and fc > 0.8 * e["coherent_to_hz"]:
                 notes.append(f"{ax}: hover crossover {fc:.0f} Hz is close to the end of the identified band "
                              f"({e['coherent_to_hz']:.0f} Hz): margins rely on the model extrapolation")
+        notes += self.lint(tune)
+        relaxed = [ax for ax, e in per.items() if e.get("idle_limits_from_flown")]
+        if relaxed:
+            notes.append(f"idle limits on {', '.join(relaxed)} = the flown tune's idle margins (it flies, but misses the design "
+                         "limits there; at very low rpm the model is least certain). Judge idle by improvement.")
         problems = validate(tune, [k for k in changed_keys(self.logged, tune) if k in tuning_keys()])
         verdict = "PASS" if not any(e["violations"] for e in per.values()) and not problems else "FAIL"
         if self.relative_gate:
@@ -329,6 +393,21 @@ class Workbench:
             r = self.assess(t, steps=steps, axes=axes)
             rows.append({"value": v, "verdict": r["verdict"], **{ax: e for ax, e in r["axes"].items()}})
         return rows
+
+    def grid(self, base: Tune, k1: str, v1: list, k2: str, v2: list) -> dict:
+        axes = sorted({a for a, ax in enumerate(AXES) for k in (k1, k2) if k.endswith(f"_{ax}")}) or None
+        cells = []
+        for a in v1:
+            for b in v2:
+                t = apply_setting(apply_setting(base.copy(), k1, a), k2, b)
+                r = self.assess(t, steps=False, axes=axes)
+                cells.append({k1: a, k2: b, "verdict": r["verdict"],
+                              "axes": {ax: {"ok": not e["violations"], "hover_ms": e["hover"]["ms"],
+                                            "hover_fc": e["hover"]["fc"], "worst_pm": e["worst"]["pm"],
+                                            "noise": e["noise_vs_safe"], "obj": e["objective_db"],
+                                            "first_violation": (e["violations"] or [None])[0]}
+                                       for ax, e in r["axes"].items()}})
+        return {"keys": [k1, k2], "values": [v1, v2], "cells": cells}
 
     def suggest(self, base: Tune, axes: list[int], maxiter: int = 30) -> dict:
         """Per-axis P/I/D/d_max helper with all other settings fixed (a proposal, not a decision)."""
@@ -528,6 +607,25 @@ def format_sweep(key: str, rows: list[dict]) -> str:
                 f"{(v[0] + (f' (+{len(v) - 1})' if len(v) > 1 else '')) if v else '-'}{st}")
             first = False
     return "\n".join(lines)
+
+
+def format_grid(res: dict) -> str:
+    k1, k2 = res["keys"]
+    v1, v2 = res["values"]
+    axes = list(res["cells"][0]["axes"]) if res["cells"] else []
+    out = [f"grid {k1} (rows) x {k2} (columns): cell = verdict hoverMs/worstPM noise obj  (per axis)"]
+    for ax in axes:
+        out.append(f"\n[{ax}]  " + "".join(f"{str(b):>24s}" for b in v2))
+        for a in v1:
+            row = f"{str(a):>6s} "
+            for b in v2:
+                c = next(c for c in res["cells"] if c[k1] == a and c[k2] == b)
+                e = c["axes"][ax]
+                nz = "-" if e["noise"] is None else f"{e['noise']:.2f}"
+                row += f"{'ok ' if e['ok'] else 'NO '}{_f(e['hover_ms'], '{:.2f}')}/{e['worst_pm']:.0f} {nz} {e['obj']:.2f}".rjust(24)
+            out.append(row)
+    out.append("\nNO = violates a limit on that axis (see `assess` of the cell for which).")
+    return "\n".join(out)
 
 
 def parse_values(spec: str) -> list:

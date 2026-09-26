@@ -35,7 +35,10 @@ user-invocable: false
       - flips, rolls and dives for propwash and bounce-back;
       - abort at any oscillation or hot motors.
    6. What to log next: the same blackbox settings plus a chirp set if the model was freestyle-only.
-      Then come back with the impressions (`bftune:feedback`).
+      Check that the settings fit the logging device (`bftune:flight-plan`: a flash chip fills in a
+      few minutes, and a slow SD card drops frames with high resolution). Then come back with the
+      impressions (`bftune:feedback`).
+   7. After pasting: ask for a fresh `diff all`, then check it with `bftune applied`.
 3. **Update the project memory:**
    - Append to `history.md`:
      ```

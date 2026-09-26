@@ -41,5 +41,11 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob, Grep
    diagnosed problem.
 6. **Deliver** per `bftune:deliver` and append the iteration to `history.md`.
 
+Apply the stop rule from `bftune:tune` ("Know when to stop"): changes below the thresholds the
+pilot can feel are not worth another flight.
+
+If the pilot asks about motor or hardware health, run `bftune motors` over all logs. It separates
+real stalls from mixer dips and crashes, and compares the motors with each other.
+
 If the pilot is happy and the data shows nothing to fix, say so. The best next step can be none,
 or a chirp flight that makes the model precise for later.

@@ -16,11 +16,13 @@ commands print human-readable text; most accept `--json`. Paths below:
 | command | time | what it gives you |
 |---|---|---|
 | `bftune project init P --name NAME` | instant | `quad.md`, `history.md`, `logs/`, `analysis/`, `tunes/`; never overwrites |
-| `bftune project next-tune-dir P` | instant | creates and prints `P/tunes/NN-date` for the next iteration |
-| `bftune tunes LOG [LOG2 ...] [--dump D] [--json]` | instant | groups logs by the tune they flew (headers only), the settings that differ between the groups, and whether the dump matches a log's tune or none (= the quad runs an unlogged tune). Run it first. |
+| `bftune project next-tune-dir P` / `latest-tune-dir P` | instant | creates and prints `P/tunes/NN-date` for the next iteration / prints the newest one (shell variables don't survive between tool calls: call this instead of storing the path in a file) |
+| `bftune tunes LOG [LOG2 ...] [--dump D] [--keys k1,k2] [--json]` | instant | groups logs by the tune they flew (headers only), the settings that differ between the groups, and whether the dump matches a log's tune or none (= the quad runs an unlogged tune). `--keys` prints those settings per log (which tune did this log fly?). Run it first. |
+| `bftune applied TUNE_CLI NEW_DUMP [--old OLD_DUMP]` | instant | after the pilot pasted a tune: are all delivered settings on the quad, is the right profile active, and what else changed between the dumps (settings reset or changed by hand). Exit 1 if something is missing. |
+| `bftune motors LOG [LOG2 ...]` | 3-10 s/log | motor health: every rpm collapse classified as `stall` (commanded up, rpm fell: ESC/prop/bearing problem), `mixer` (commanded down in hard moves: normal) or `crash`; rpm per command per motor (weak motor), telemetry jitter, hover command share |
 | `bftune inspect LOG [--dump D]` | 2-10 s | sessions, duration, log rate, debug mode, chirp runs per axis (reconstructed or not), warnings |
 | `bftune diagnose LOG [LOG2 ...] [--dump D] [-v] [--json]` | 3-10 s/log | findings (id, severity, evidence, causes, knobs); works without chirps; compare several logs of one quad |
-| `bftune errspec LOG [LOG2 ...]` | 3-10 s/log | free-flight tracking-error spectrum per band and axis; a 30-60 Hz bump is the sensitivity peak |
+| `bftune errspec LOG [LOG2 ...] [--by-throttle 0.35]` | 3-10 s/log | free-flight tracking-error spectrum per band and axis, plus how hard each flight was flown (stick RMS, throttle percentiles, motor saturation); a 30-60 Hz bump is the sensitivity peak. A flat shift in every band with more stick activity is flying style. |
 | `bftune analyze LOG [--dump D] -o A [--index N] [--safe-log X]... [--safe-cli Y]...` | 10-60 s | identification (chirp, or a freestyle fallback), validation, noise model, diagnosis → `A/analysis.json`, `A/analysis.pkl`, `plant_bode.png`, `motor_model.png`. If the dump differs from the log's tune, the model uses the log's settings, and the dump becomes the **tune on the quad** (`analysis.json` → `dump_mismatch`) |
 | `bftune safe -o A [--log X] [--cli Y]` | 5 s | lists or adds proven-safe tunes (noise references) to an analysis |
 | `bftune brief -o A [--style S]` | 5-15 s | **the situation report** (JSON, also `A/brief.json`): identification source, uncertainty and plant per axis; flight facts; current tune; its assessment; proven-safe tunes with their diffs and assessments; noise bands and persistent peaks; findings; warnings |
@@ -32,7 +34,8 @@ Global flags: `--style freestyle|race|cinematic` and `--noise-budget 0.9`.
 |---|---|
 | `bftune candidate -o A cand.txt [--base other.txt] [--set 'key=value # reason']...` | writes a candidate file: the tune on the quad (or `--base`) plus the `--set` changes. Use it for every variant instead of editing files in the shell. It covers all flight-behaviour settings. |
 | `bftune assess -o A f1.txt [f2.txt ...] [--with-current] [--with-safe] [--fast] [--json]` (`--with-current` adds `current` = the logged tune and, if the dump differs, `on_quad`) | verdict (PASS/FAIL, `gate` absolute or relative), per axis hover/idle/full crossover, PM, GM, Ms (+ frequency), worst case and label, noise vs safe, stick-flick lag and overshoot, violations, notes |
-| `bftune sweep -o A cand.txt KEY VALUES` | one row per value and axis: axis verdict, hover crossover/PM/Ms, full PM, worst PM/Ms, noise, objective, first violation. VALUES are `20:50:5` or `a,b,c`; lists like `100,100,0;100,50,0` for array settings |
+| `bftune sweep -o A cand.txt KEY VALUES [KEY2 VALUES2 ...] [--steps]` | one table per setting: one row per value and axis with the axis verdict, hover crossover/PM/Ms@Hz, full PM, worst PM/Ms, noise, objective, first violation. VALUES are `20:50:5` or `a,b,c`; `100,100,0;100,50,0` for array settings. Several pairs = several independent sweeps in one call (no shell loops). |
+| `bftune grid -o A cand.txt KEY1 VALUES1 KEY2 VALUES2` | two settings at once (e.g. `p_pitch 38,40,42 d_pitch 35,37,39`): per axis a matrix of ok/NO, hover Ms, worst PM, noise, objective. Use it for P x D windows instead of scripts. |
 | `bftune suggest -o A f1.txt [f2.txt ...] [--axis roll]` | P/I/D/d_max proposal per axis with everything else fixed (limited to ±15 % of the flown gains when there is no chirp; `feasible: false` = nothing meets every limit, the least-violating point is shown); with several files, the verdict and objective of each at its best gains (to compare filter layouts) |
 | `bftune ff -o A cand.txt --axis roll --values 60:180:10` | FF value → stick lag, flick and snap overshoot, settle time |
 | `bftune noise -o A [cand.txt]` | per throttle band: measured D and gyro noise, fit error, non-RPM peaks (persistent?), safe level, candidate |
@@ -40,8 +43,12 @@ Global flags: `--style freestyle|race|cinematic` and `--noise-budget 0.9`.
 | `bftune emit -o A cand.txt [--to DIR]` | deliverables relative to the tune on the quad (`tune_cli.txt`, `revert_cli.txt`, `report.md/html`, `tune.json`, plots); **exit 2 = FAIL** |
 | `bftune optimize -o A_COPY` | slow automatic baseline (10-60 min). Use it only as a second opinion, in a copy of `A` |
 
-Shell: give a sweep all its values in one call (`20:50:5`, `a,b,c`, `x;y` for arrays) instead of a
-shell loop. The Bash tool may not be the user's login shell, so write plain POSIX/bash.
+Shell:
+- Give sweeps all their values and keys in one call instead of shell loops. The Bash tool may not
+  be the user's login shell (zsh does not word-split `$var`), so write plain POSIX/bash.
+- Run dependent steps in one command or one after the other, never as parallel tool calls that
+  wait for each other's files.
+- Before writing a Python script, check whether a command above already answers the question.
 
 ## Candidate files
 ```

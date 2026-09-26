@@ -58,14 +58,21 @@ claude --plugin-dir .
 Normally only the agent calls these. `skills/toolbox/SKILL.md` is the agent-facing reference.
 ```bash
 bftune project init P --name NAME             # per-quad folder: quad.md, history.md, logs/, analysis/, tunes/
-bftune inspect  LOG --dump DUMP               # sessions, chirps, warnings
+bftune project next-tune-dir|latest-tune-dir P
+bftune tunes    LOG... [--dump D] [--keys k1,k2]  # which tune did each log fly; does the dump match
+bftune applied  tune_cli.txt NEW_DUMP [--old OLD_DUMP]  # was the delivered CLI pasted; what else changed
+bftune inspect  LOG --dump DUMP               # sessions, chirps, gaps, warnings
 bftune diagnose LOG [LOG2 ...] -v             # problem finder (no chirp needed)
-bftune errspec  LOG [LOG2 ...]                # tracking-error spectra (pilot cross-check)
+bftune motors   LOG [LOG2 ...]                # motor health: stall / mixer / crash events, rpm per command
+bftune errspec  LOG [LOG2 ...] [--by-throttle 0.35]  # tracking-error spectra + flying intensity
 bftune analyze  LOG --dump DUMP -o A [--safe-log X] [--safe-cli Y]   # once per log, 10-60 s
 bftune brief    -o A                          # JSON situation report
 bftune candidate -o A cand.txt                # editable tune file (the logged tune)
 bftune assess   -o A cand.txt [more.txt] --with-current --with-safe  # verdict + margins + step + noise (~1 s)
-bftune sweep    -o A cand.txt d_roll 20:50:5  # tradeoff table for one setting
+bftune candidate -o A v2.txt --base cand.txt --set 'key=value # reason'   # variants without shell edits
+bftune sweep    -o A cand.txt d_roll 20:50:5 [p_roll 30:50:5 ...]  # tradeoff tables, one per setting
+bftune grid     -o A cand.txt p_pitch 38,40,42 d_pitch 35,37,39     # two settings at once
+bftune coverage -o A cand.txt                 # every flight-behaviour feature group
 bftune suggest  -o A cand.txt [v2.txt ...]    # per-axis P/I/D proposal; compare layouts at best gains
 bftune ff       -o A cand.txt --axis roll     # feedforward: lag vs overshoot
 bftune noise    -o A [cand.txt]               # noise per band, non-RPM peaks, candidate vs safe
@@ -97,10 +104,22 @@ bftune synth 5inch -o twin.pkl --truth        # synthetic flight with known trut
    - step simulation with FF, RC smoothing, TPA and D-max;
    - the PASS/FAIL gate.
 6. **Diagnose:** heuristics on the flight data, independent of the model. Resonances in the
-   tracking-error spectrum per throttle band, propwash stratified by manoeuvre, bounce-back,
-   saturation, imbalance, desync and HF motor noise.
+   tracking-error spectrum per throttle band (low-throttle ones checked against the idle motor
+   frequency with order tracking), propwash stratified by manoeuvre, bounce-back, part-throttle
+   saturation, imbalance with direction, motor stalls classified against the commanded output
+   (stall / mixer / crash), throttle-punch dips, PID-sum clipping and HF motor noise.
 7. **Emit:** a range-checked CLI block (with the simplified-slider guard), a revert block, and a
    report with plots.
+
+## Learning from real sessions
+The best source of improvements is a real tuning session. Read the transcript (claude.ai/code sessions
+expose their events; local ones live in `~/.claude/projects/`) and look for:
+- custom Python scripts the agent wrote: each one is a missing instrument;
+- shell workarounds: a missing CLI option;
+- deliveries that failed the gate "with caveats": a gate that is wrong for that quad;
+- facts the agent had to work out by hand: a missing `diagnose` finding or lint.
+
+The 0.6.0 changes all came from two such sessions (a 3.5" and a 5", 2026-09-26).
 
 ## Evals
 `evals/` contains plugin eval cases. Each builds a synthetic quad twin with known truth in its

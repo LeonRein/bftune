@@ -120,19 +120,30 @@ def saturation(fl: Flight) -> list[Finding]:
 
 
 def desync(fl: Flight) -> list[Finding]:
-    if fl.motor_hz is None:
+    """rpm collapses, classified by what the motor was commanded (see analysis.motors)."""
+    from .motors import rpm_events
+
+    ev = rpm_events(fl)
+    if not ev:
         return []
-    armed = fl.mode(0) & (fl.throttle > 0.1)
-    if armed.sum() < fl.fs:
-        return []
-    # one motor far below the others while flying (not at idle)
-    drop = armed & np.any(fl.motor_hz < 0.3 * np.median(fl.motor_hz, axis=1, keepdims=True), axis=1)
-    n = len(_segments(drop, max(2, int(0.005 * fl.fs))))
-    if n:
-        return [Finding("possible_desync", "problem" if n > 1 else "warn", f"{n} event(s) where one motor's rpm collapsed while others ran",
-                        {"events": n}, ["ESC desync (timing, demag)", "prop strike", "telemetry dropout"],
-                        ["check ESC timing/demag settings", "raise dyn_idle_min_rpm", "inspect props"])]
-    return []
+    real = [e for e in ev if e["kind"] in ("stall", "unclear")]
+    mixer = sum(e["kind"] == "mixer" for e in ev)
+    crash = sum(e["kind"] == "crash" for e in ev)
+    out = []
+    if real:
+        stalls = [e for e in real if e["kind"] == "stall"]
+        out.append(Finding("motor_stall", "problem" if stalls else "warn",
+                           f"{len(real)} event(s) where a motor's rpm collapsed although it was commanded up "
+                           f"(motor {', '.join(str(e['motor']) for e in real)} at t={', '.join(str(e['t']) for e in real)} s)",
+                           {"events": real},
+                           ["ESC desync (timing, demag)", "prop strike / damaged prop", "bearing or bell rub", "telemetry dropout"],
+                           ["inspect prop, bell and bearing of that motor", "ESC demag/timing settings",
+                            "raise dyn_idle_min_rpm", "`bftune motors LOG` for the full review"]))
+    if mixer or crash:
+        out.append(Finding("rpm_dips_explained", "info",
+                           f"{mixer} rpm dip(s) where the mixer commanded the motor down (hard flips/rolls: normal)"
+                           + (f", {crash} during a crash" if crash else ""), {"mixer": mixer, "crash": crash}))
+    return out
 
 
 def oscillation(fl: Flight) -> list[Finding]:
@@ -170,13 +181,56 @@ def oscillation(fl: Flight) -> list[Finding]:
             if 0 < k < len(r) - 1 and r[k] > 6.0 and r[k] >= r[k - 1] and r[k] >= r[k + 1]:
                 found.append((label, float(f[m][k]), float(r[k]), len(specs)))
         for label, fr, db, nwin in found:
+            ev = {"freq_hz": round(fr, 1), "db_above_trend": round(db, 1), "windows": nwin}
+            causes = ["sensitivity peak from low phase margin (P/D too high for the delay, too much filter lag)",
+                      "mechanical resonance not filtered", "TPA insufficient (high throttle)"]
+            extra = ""
+            if label.startswith("low") and fl.motor_hz is not None:
+                lowthr = fl.mode(0) & (fl.throttle < 0.2)
+                if lowthr.sum() > fl.fs:
+                    idle = np.percentile(fl.motor_hz[lowthr].mean(axis=1), [10, 50])
+                    rmin = fl.cfg.int("rpm_filter_min_hz", 100)
+                    ev.update({"idle_motor_hz_p10_p50": [round(float(x), 1) for x in idle], "rpm_filter_min_hz": rmin})
+                    if 0.85 * idle[0] <= fr <= 1.15 * idle[1]:
+                        line = _motor_line_db(fl, axis, lowthr)
+                        ev["motor_line_db"] = round(line, 1)
+                        if rmin > idle[0] and line >= 3.5:
+                            extra = (f"; matches the idle motor frequency ({idle[0]:.0f}-{idle[1]:.0f} Hz) below rpm_filter_min_hz "
+                                     f"{rmin}, and the motor line is visible in the filtered gyro (+{line:.1f} dB)")
+                            causes.insert(0, "motor fundamental at idle not notched (rpm_filter_min_hz above the idle motor Hz)")
+                        elif rmin > idle[0]:
+                            extra = (f"; near the idle motor frequency ({idle[0]:.0f}-{idle[1]:.0f} Hz, below rpm_filter_min_hz "
+                                     f"{rmin}) but no distinct motor line in the filtered gyro ({line:+.1f} dB): more likely "
+                                     "body motion; verify before lowering rpm_filter_min_hz")
+                            causes.insert(0, "body motion at low throttle (broad hump) - or the un-notched motor fundamental")
+                        else:
+                            extra = f"; near the idle motor frequency ({idle[0]:.0f}-{idle[1]:.0f} Hz), which the RPM filter covers"
+                            causes.insert(0, "body motion at low throttle (broad hump, not a motor line) or idle-case loop peak")
             out.append(Finding(f"resonance_{AXES[axis]}_{label.split()[0]}", "problem" if db > 10 else "warn",
-                               f"{AXES[axis]}: tracking-error peak at ~{fr:.0f} Hz, +{db:.0f} dB above trend ({label})",
-                               {"freq_hz": round(fr, 1), "db_above_trend": round(db, 1), "windows": nwin},
-                               ["sensitivity peak from low phase margin (P/D too high for the delay, too much filter lag)",
-                                "mechanical resonance not filtered", "TPA insufficient (high throttle)"],
-                               ["compare with assess 'Ms' and its frequency; reduce P/D or filter lag; TPA; dyn notch"]))
+                               f"{AXES[axis]}: tracking-error peak at ~{fr:.0f} Hz, +{db:.0f} dB above trend ({label}){extra}",
+                               ev, causes,
+                               ["compare with assess 'Ms' and its frequency; reduce P/D or filter lag; TPA; dyn notch",
+                                "low throttle: rpm_filter_min_hz vs idle motor Hz (assess notes)"]))
     return out
+
+
+def _motor_line_db(fl: Flight, axis: int, mask: np.ndarray, win_s: float = 0.25) -> float:
+    """How strongly the filtered gyro follows the motors' own rotation frequency (order tracking): energy
+    demodulated at the instantaneous motor frequency vs. at +-7/13 Hz offsets. > ~3.5 dB = a motor line."""
+    x = fl.gyro[:, axis] - np.mean(fl.gyro[mask, axis])
+    n = int(win_s * fl.fs)
+    idx = np.flatnonzero(mask)
+    starts = [s for s in range(0, len(idx) - n, n) if idx[s + n - 1] - idx[s] == n - 1][:400]
+    if not starts:
+        return 0.0
+    res = []
+    for off in (0.0, 7.0, -7.0, 13.0, -13.0):
+        tot = 0.0
+        for mot in range(fl.motor_hz.shape[1]):
+            z = x * np.exp(-2j * np.pi * np.cumsum(fl.motor_hz[:, mot] + off) / fl.fs)
+            tot += sum(abs(z[idx[s] : idx[s] + n].mean()) ** 2 for s in starts)
+        res.append(tot)
+    return float(10 * np.log10(res[0] / max(np.mean(res[1:]), 1e-30)))
 
 
 def propwash(fl: Flight) -> list[Finding]:
