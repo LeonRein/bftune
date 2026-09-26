@@ -56,3 +56,12 @@ def test_mismatched_dump_end_to_end(tmp_path):
     cli = (out / "tune_cli.txt").read_text()
     assert "set f_roll = 140" in cli and "set p_roll" not in cli and "thrust_linear" not in cli  # relative to quad
     assert "on_quad" in res["assessment"]
+
+
+def test_firmware_support_levels():
+    from bftune.pipeline import firmware_support
+
+    assert firmware_support("2026.6.2")[0] == "ok"
+    assert firmware_support("2027.1.0")[0] == "newer"
+    assert firmware_support("4.5.1")[0] == "older"
+    assert firmware_support(None)[0] == "unknown"

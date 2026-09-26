@@ -107,7 +107,9 @@ left off.
   Every tune comes with a revert block.
 
 ## Limits
-- Betaflight **2026.6.x** only (the controller and filter model is version-specific).
+- Model-based tuning needs Betaflight **2026.6.x**: the controller and filter model is a port of that
+  release. On older firmware, bftune still diagnoses logs (problems, motor health, error spectra)
+  but won't compute a tune. Newer releases are checked against the log before the model is trusted.
 - The model is linear around each operating point. Saturation, airmode, I-term and anti-gravity
   are handled by judgement and margins, not by the model.
 - Noise above the log's Nyquist frequency is inferred, not observed.

@@ -232,5 +232,6 @@ findings never block a *conservative* tune, but they do block an aggressive one.
     tell the pilot the direction `diagnose` reports and continue;
   - saturation at part throttle (overweight or weak motors);
   - a mechanical resonance that moves with nothing.
-- The firmware is not 2026.6.x (the model is version-specific).
+- The firmware is not 2026.6.x (`inspect` warns; `analyze` refuses older releases). See
+  `bftune:craft-classes`.
 - The pilot's report contradicts the model and you cannot explain why.

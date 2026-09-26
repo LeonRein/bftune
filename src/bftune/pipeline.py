@@ -100,11 +100,38 @@ def sanity_warnings(fl: Flight, idn: Identification | None) -> list[str]:
     return w
 
 
+MODEL_FIRMWARE = (2026, 6)  # the controller/filter model is a port of this Betaflight release
+
+
+def firmware_support(version: str | None) -> tuple[str, str]:
+    """('ok' | 'unknown' | 'newer' | 'older', message) for the firmware a log was flown with."""
+    try:
+        v = tuple(int(x) for x in str(version).split(".")[:2]) if version else None
+    except ValueError:
+        v = None
+    if v is None:
+        return "unknown", ("firmware version unknown (no dump/header version): the model is a port of Betaflight 2026.6; "
+                           "the filter-chain check shows whether it matches")
+    if v == MODEL_FIRMWARE:
+        return "ok", ""
+    if v > MODEL_FIRMWARE:
+        return "newer", (f"firmware {version} is newer than the model (Betaflight 2026.6): if the filter-chain check passes, "
+                         "the controller and filters still match; if it fails, stop - the model needs updating")
+    return "older", (f"firmware {version} is older than the model (Betaflight 2026.6). Older releases differ in the "
+                     "controller and filters (e.g. biquad instead of SVF filters, d_min instead of d_max, TPA, chirp), "
+                     "so margins, noise predictions and the CLI would be wrong. Data-only tools still work: diagnose, "
+                     "motors, errspec, tunes, inspect. Update to 2026.6 for model-based tuning")
+
+
 def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | None = None, plots: bool = True,
-            log=print, safe_logs: list[str] | None = None, safe_cli: list[str] | None = None) -> Analysis:
+            log=print, safe_logs: list[str] | None = None, safe_cli: list[str] | None = None,
+            any_firmware: bool = False) -> Analysis:
     out.mkdir(parents=True, exist_ok=True)
     log(f"decoding {log_path} ...")
     fl = load_flight(log_path, dump_path, log_index)
+    level, msg = firmware_support(fl.cfg.firmware_version)
+    if level == "older" and not any_firmware:
+        raise SystemExit("bftune analyze: " + msg + " (override with --any-firmware at your own risk)")
     tune = Tune.from_config(fl.cfg)
     log(f"{fl.n} frames, {fl.t[-1]:.0f} s, log rate {fl.fs:.0f} Hz, loop {fl.loop_hz:.0f} Hz, firmware {fl.cfg.firmware_version}")
     log("identifying plant ...")
@@ -122,6 +149,8 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     log("building alias-aware noise model ...")
     nm = build_noise(fl, tune, idn.time_scale)
     warns = sanity_warnings(fl, idn)
+    if level != "ok":
+        warns.insert(0, msg)
     bad = [b.throttle for b in nm.bands if np.max(b.calib_err) > 1.0]
     if bad:
         warns.append(f"noise-model fit error > 1 in throttle bands {', '.join(f'{t:.2f}' for t in bad)}: noise predictions there are less certain")

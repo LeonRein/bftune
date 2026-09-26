@@ -16,6 +16,8 @@ to write became an instrument, and the gate no longer blocks quads it was wrong 
 - New `bftune grid` (two settings at once); `sweep` takes several KEY VALUES pairs; `bftune applied` checks a dump
   after pasting (missing lines, wrong profile, settings reset by accident); `tunes --keys` shows settings per log;
   `errspec` reports flying intensity and `--by-throttle`; `project latest-tune-dir`.
+- Firmware check: `analyze` refuses logs from releases older than the model (2026.6) unless `--any-firmware`;
+  newer or unknown versions get a warning (trust the model only if the filter-chain checks pass). `inspect` shows it.
 - The plugin launcher finds uv in ~/.local/bin and ~/.cargo/bin and prints the install command otherwise.
 - Skills: storage-aware logging (SD gaps with high resolution, flash capacity), a noise-headroom flight protocol,
   a "know when to stop" rule with perceptibility thresholds, `bftune applied` after pasting, motor reviews,

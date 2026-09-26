@@ -53,7 +53,11 @@ filter removes.
   Make diagnosis-driven, small changes and plan a chirp flight.
 - **Chirps on only some axes:** the other axes have no model. Leave them unchanged unless there
   is a diagnosed problem and a relative argument.
-- **Old firmware (not 2026.6.x):** the controller and filter model don't match; bftune refuses.
-  Explain, and offer a diagnosis-only review (`bftune diagnose`) plus general advice.
+- **Firmware other than 2026.6.x:** the model is a port of Betaflight 2026.6.
+  - **Older** releases (4.x, 2025.x) differ in filters (biquad, not SVF), D-min vs D-max, TPA and
+    chirp, so `analyze` refuses. Offer a diagnosis-only review (`diagnose`, `motors`, `errspec`,
+    `tunes`) plus general advice, or ask the pilot to update to 2026.6.
+  - **Newer** releases get a warning. Trust the model only if every filter-chain check passes;
+    otherwise stop.
 - **Angle-mode pilots / cinematic:** a lower crossover is fine. Prioritize smoothness (FF and
   overshoot limits 3/8 %, `rc_smoothing_auto_factor` 60) and low heat.

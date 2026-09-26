@@ -78,6 +78,11 @@ def cmd_inspect(a) -> int:
             print(f"    warning: the dump does not belong to this log: {len(cfg.mismatch)} tuning settings differ "
                   f"(e.g. {', '.join(f'{k} {h}->{d}' for k, h, d in cfg.mismatch[:4])}). The model uses the log's own "
                   "settings; the dump is treated as the tune on the quad now.")
+        from .pipeline import firmware_support
+
+        level, msg = firmware_support(cfg.firmware_version)
+        if level != "ok":
+            print("    warning:", msg)
         for w in sanity_warnings(fl, None):
             print("    warning:", w)
     return 0
@@ -86,7 +91,8 @@ def cmd_inspect(a) -> int:
 def cmd_analyze(a) -> int:
     from .pipeline import analyze
 
-    analyze(a.log, a.dump, Path(a.out), a.index, log=_log, safe_logs=a.safe_log, safe_cli=a.safe_cli)
+    analyze(a.log, a.dump, Path(a.out), a.index, log=_log, safe_logs=a.safe_log, safe_cli=a.safe_cli,
+            any_firmware=a.any_firmware)
     return 0
 
 
@@ -461,6 +467,8 @@ def main(argv: list[str] | None = None) -> int:
         s.add_argument("--safe-log", action="append",
                        help="log of another tune of this quad that flew with cool motors (sets the noise budget)")
         s.add_argument("--safe-cli", action="append", help="CLI diff of another proven-safe tune")
+        s.add_argument("--any-firmware", action="store_true",
+                       help="analyze firmware older than the model (2026.6) anyway: margins/CLI may be wrong")
         s.add_argument("-o", "--out", default="bftune_out")
         if name == "all":
             s.add_argument("--style", default="freestyle", choices=STYLES)
