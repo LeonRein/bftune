@@ -281,7 +281,8 @@ class AxisProblem:
         nr = 0.0
         if self.noise_Q is not None and self.noise_ref is not None:
             nr = float(np.max(self.noise(kp, kd) / np.maximum(self.noise_ref, 1e-9)))
-            penalty += 2000 * max(0.0, nr - 0.97 * g.noise_budget) ** 2
+            limit = getattr(self, "noise_limit", None) or g.noise_budget
+            penalty += 2000 * max(0.0, nr - 0.97 * limit) ** 2
         total = obj + penalty
         if detail:
             self.worst_case = worst_case

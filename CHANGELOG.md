@@ -6,6 +6,12 @@ to write became an instrument, and the gate no longer blocks quads it was wrong 
 - **Idle limits relative to the flown tune.** When the tune that flew already misses the idle design limits (large
   props, low idle, motor lag extrapolated at very low rpm), the idle cases require "no worse than the flown tune".
   The 5" was delivered twice with emit FAIL for this reason, and `suggest` chased the unreachable idle gate (P 22-24).
+- **Gain margin fixed for conditionally stable loops.** At idle (I-term + large motor lag) the loop crosses -180
+  deg at low frequency with |L| > 1; that crossing limits how far the gain may *fall*, but was reported as a negative
+  GM (e.g. "-13 dB", read as "unstable") and penalised changes that add authority (more dyn idle, more D). GM is now
+  the smaller of the upward and downward margins (both positive); `gm_up_db`/`gm_down_db` are reported too.
+- The motor-noise limit shown in violations is the real one (the budget or the flown tune's level), and `suggest`
+  optimises against it instead of cutting noise below what already flew.
 - Freestyle nominal hover PM floor 42 deg (race 40): tunes pilots rated "feels good" sat at PM 42-47 with Ms <= 2.0.
 - New `bftune motors`: rpm collapses classified as stall (commanded up), mixer (commanded down in hard moves) or
   crash; rpm per command per motor, telemetry jitter. `diagnose` reports `motor_stall` only for real stalls
@@ -13,7 +19,8 @@ to write became an instrument, and the gate no longer blocks quads it was wrong 
 - Low-throttle resonance findings say whether the peak sits at the idle motor frequency and whether a motor line
   survives into the filtered gyro (order tracking). `assess` lints `rpm_filter_min_hz` above the idle motor frequency
   (incl. the dyn idle floor), a TPA breakpoint below hover, and a D-max that can never engage.
-- New `bftune grid` (two settings at once); `sweep` takes several KEY VALUES pairs; `bftune applied` checks a dump
+- New `bftune grid` (two settings at once, with the reason for every failing cell); `sweep` flags settings that have
+  no effect (inactive notch, static LPF under a dynamic one, ...); `sweep` takes several KEY VALUES pairs; `bftune applied` checks a dump
   after pasting (missing lines, wrong profile, settings reset by accident); `tunes --keys` shows settings per log;
   `errspec` reports flying intensity and `--by-throttle`; `project latest-tune-dir`.
 - Firmware check: `analyze` refuses logs from releases older than the model (2026.6) unless `--any-firmware`;

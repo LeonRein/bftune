@@ -16,13 +16,15 @@ from ..model.plant import Plant
 class LoopMetrics:
     fc: float  # gain crossover [Hz]
     pm: float  # phase margin [deg]
-    gm_db: float  # gain margin [dB] (min over all -180° crossings)
+    gm_db: float  # gain margin [dB]: the smaller of the upward and downward margins (both >= 0 when stable)
     f180: float  # frequency of the limiting -180° crossing
     ms: float  # peak |S|
     ms_hz: float
     mt: float  # peak |T|
     dm_ms: float  # delay margin [ms]
     bw_s: float  # disturbance-rejection bandwidth: first f with |S| >= -3 dB
+    gm_up_db: float = float("inf")  # how much the loop gain may rise before instability
+    gm_down_db: float = float("inf")  # how much it may fall (conditionally stable loops: I-term + lag at idle)
     ok: bool = True
 
     def as_dict(self) -> dict:
@@ -54,21 +56,28 @@ def metrics(f: np.ndarray, L: np.ndarray) -> LoopMetrics:
     # gain margin: all crossings of the real axis on the negative side (Im L changes sign with Re L < 0)
     im = L.imag
     cross = np.flatnonzero((np.sign(im[:-1]) != np.sign(im[1:])) & (L.real[:-1] < 0))
-    gm, f180 = float("inf"), float("nan")
+    # A crossing with |L| < 1 limits how far the gain may RISE (g > 0 dB). A crossing with |L| > 1 (at low
+    # frequency in conditionally stable loops, e.g. I-term + motor lag at idle) limits how far it may FALL:
+    # its margin is -g. The old min-over-all-crossings reported that as a negative "GM" (looked unstable).
+    up, down, f_up, f_down = float("inf"), float("inf"), float("nan"), float("nan")
     for k in cross:
         t = im[k] / (im[k] - im[k + 1])
         re = L.real[k] + t * (L.real[k + 1] - L.real[k])
         if re < 0:
             g = -20 * np.log10(-re)
-            if g < gm:
-                gm, f180 = g, float(f[k] + t * (f[k + 1] - f[k]))
+            fk = float(f[k] + t * (f[k + 1] - f[k]))
+            if g >= 0 and g < up:
+                up, f_up = g, fk
+            elif g < 0 and -g < down:
+                down, f_down = -g, fk
+    gm, f180 = (up, f_up) if up <= down else (down, f_down)
     sm = np.abs(S)
     ks = int(np.argmax(sm))
     bw = np.flatnonzero(sm >= 1 / np.sqrt(2))
     bw_s = float(f[bw[0]]) if len(bw) else float("nan")
     return LoopMetrics(
         fc=fc, pm=pm, gm_db=gm, f180=f180, ms=float(sm[ks]), ms_hz=float(f[ks]), mt=float(np.max(np.abs(T))),
-        dm_ms=float(dm), bw_s=bw_s,
+        dm_ms=float(dm), bw_s=bw_s, gm_up_db=float(up), gm_down_db=float(down),
     )
 
 

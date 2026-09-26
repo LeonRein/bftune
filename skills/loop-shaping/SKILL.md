@@ -81,7 +81,8 @@ sensitivity peak (the crossover moves into the delay region). Then keep d_max = 
 
 ## Feedforward
 `bftune ff -o A cand.txt --axis roll --values 60:180:10`. Pick the lowest stick lag with flick
-overshoot ≤ 10 % and snap overshoot ≤ 15 % (race 12/20 %, cinematic 3/8 %). On yaw,
+overshoot ≤ 10 % and snap overshoot ≤ 15 % (race 12/20 %, cinematic 3/8 %). These are targets, not
+part of the gate. If the flown tune already overshoots more and the pilot likes it, don't make it worse. On yaw,
 `feedforward_yaw_hold_*` also acts.
 
 `feedforward_boost`, `feedforward_smooth_factor` and `feedforward_averaging` are in the step

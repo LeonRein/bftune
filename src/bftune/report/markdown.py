@@ -87,7 +87,7 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
             nb = _f(e.get("noise_vs_safe"), "{:.2f}") if result.get("noise_model", True) else "n/a"
             st = e.get("step", {}).get("flick")
             stt = (f"{st.get('stick_lag_ms', st['tracking_lag_ms']):.1f} ms / {st['overshoot_pct']:.0f}%") if st else "—"
-            L.append(f"| {ax} | {name} | {a['verdict']} | {_f(h['fc'])} Hz | {_f(h['pm'], '{:.0f}')}° | {_f(h['ms'], '{:.2f}')} | "
+            L.append(f"| {ax} | {name} | {'ok' if not e.get('violations') else 'FAIL'} | {_f(h['fc'])} Hz | {_f(h['pm'], '{:.0f}')}° | {_f(h['ms'], '{:.2f}')} | "
                      f"{_f(i['fc'])} Hz | {_f(i['ms'], '{:.2f}')} | {_f(fu['pm'], '{:.0f}')}° | {_f(w['pm'], '{:.0f}')}° | "
                      f"{_f(w['ms'], '{:.2f}')} | {nb} | {stt} |")
     L.append("")
@@ -96,10 +96,14 @@ def write_report(out: Path, an, result: dict, apply_txt: str, revert_txt: str) -
         L += [f"- note: {n}" for n in notes]
         L.append("")
     unc = getattr(idn, "uncertainty", None) or {"k_hi": 1.10, "k_lo": 0.88, "dT": 0.0003}
+    g = result.get("goals") or {}
     L.append(f"Constraints (every case: idle/hover/mid/full throttle, base D and D-max, gain +{(unc['k_hi'] - 1) * 100:.0f} % / "
              f"−{(1 - unc['k_lo']) * 100:.0f} %, +{unc['dT'] * 1000:.1f} ms delay, "
-             "dyn notch at its minimum): PM ≥ 45° (35° in uncertainty variants), GM ≥ 6 dB (4 dB), Ms ≤ 2.0 (2.4), "
-             "motor noise ≤ 0.9× the level of a tune proven to fly with cool motors.")
+             f"dyn notch at its minimum): PM ≥ {g.get('pm_min', 42):.0f}° ({g.get('pm_min_robust', 35):.0f}° in uncertainty "
+             f"variants), GM ≥ {g.get('gm_min_db', 6):.0f} dB ({g.get('gm_min_robust_db', 4):.0f} dB) in either direction, "
+             f"Ms ≤ {g.get('ms_max', 2.0):.1f} ({g.get('ms_max_robust', 2.4):.1f}); idle limits relaxed to the flown tune's "
+             "idle margins where it misses them; motor noise ≤ the budget of a tune proven to fly with cool motors "
+             "(or the flown tune's own level).")
     L.append("")
     for key in ("loop", "step", "noise"):
         if key in result["plots"]:

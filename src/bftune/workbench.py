@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -247,10 +247,12 @@ class Workbench:
         has_noise = prob.noise_Q is not None and bool(self.noise_ref)
         # the flown tune's own noise has flown: never force a cut below it (unless the budget was lowered
         # explicitly below 0.9, i.e. hot motors). The 0.9 margin guards going *above* what flew.
-        noise_arg = nr if has_noise else None
-        if has_noise and self.goals.noise_budget >= 0.9 and nr <= self._logged_noise(axis) + 1e-3:
-            noise_arg = None
-        viol = violations(rows, self.goals, noise_arg)
+        viol = violations(rows, self.goals, None)
+        if has_noise:
+            limit = self.noise_limit(axis)
+            if nr > limit + 1e-3:
+                why = "the flown tune's level" if limit > self.goals.noise_budget else "budget"
+                viol.append(f"motor noise {nr:.2f}x proven-safe level (limit {limit:.2f}x: {why})")
         if self.relative_gate:
             viol = self._relative_violations(axis, rows, viol)
         res = {
@@ -275,6 +277,12 @@ class Workbench:
         t = base.copy().set(f"p_{ax}", r.p).set(f"i_{ax}", r.i).set(f"d_{ax}", r.d).set(f"d_max_{ax}", r.d_max)
         v = self.assess_axis(t, axis, steps=False)["violations"]
         return (v[0] + (f" (+{len(v) - 1} more)" if len(v) > 1 else "")) if v else "none under the delivery gate"
+
+    def noise_limit(self, axis: int) -> float:
+        """Allowed motor noise (x proven-safe level): the budget, or the flown tune's own level if higher
+        (it flew, so no forced cut) - unless the budget was lowered below 0.9 on purpose (warm/hot motors)."""
+        b = self.goals.noise_budget
+        return max(b, self._logged_noise(axis)) if b >= 0.9 else b
 
     def _logged_noise(self, axis: int) -> float:
         cache = self.__dict__.setdefault("_logged_nr", {})
@@ -332,8 +340,9 @@ class Workbench:
             out.append(f"rpm_filter_min_hz {rmin} is above the idle motor frequency (~{idle:.0f} Hz"
                        + (f", dyn idle floor {floor:.0f} Hz" if floor > self.src.idle_hz(10) else "")
                        + "): the motor fundamental at low throttle is not notched. It can show up as a low-throttle "
-                       f"error peak near {idle:.0f} Hz (`diagnose`). Consider rpm_filter_min_hz ~{max(50, int(idle * 0.9 / 5) * 5)} "
-                       "(a notch near the idle crossover costs ~1 deg of idle PM: check with `sweep`).")
+                       f"error peak near {idle:.0f} Hz. If `diagnose` shows a motor line there, lower rpm_filter_min_hz to "
+                       f"~{max(50, int(idle * 0.9 / 5) * 5)} (a notch near the idle crossover costs ~1 deg of idle PM: check "
+                       "with `sweep`). If it shows body motion, leave it.")
         bp = tune.i("tpa_breakpoint")
         hover_thr = float(np.mean([ai.op.throttle for ai in self.idn.axes.values()])) if self.idn.axes else 0.3
         if 1000 + 1000 * hover_thr > bp and tune.i("tpa_rate") > 0:
@@ -418,6 +427,8 @@ class Workbench:
             prob = self.axis_problem(base, a)
             if self.relative_gate:  # no chirp: stay close to the flown gains (skills: about ±15 %)
                 prob.goals = replace(prob.goals, gain_range=(0.85, 1.15))
+            if prob.noise_Q is not None and self.noise_ref:
+                prob.noise_limit = self.noise_limit(a)
             r = optimize_axis(prob, base, maxiter=maxiter)
             if self.relative_gate:  # feasibility = the gate the delivery uses (relative to the flown tune)
                 ax = AXES[a]
@@ -534,6 +545,7 @@ class Workbench:
             "verdict": verdict, "violations": viol, "noise_model": bool(self.an.nm.bands), "style": self.style,
             "changes": [{"setting": k, "old": o, "new": n, "reason": r} for k, o, n, r in rows],
             "unexplained_changes": missing, "assessment": ass, "problems": problems, "plots": plots,
+            "goals": {k: v for k, v in asdict(self.goals).items() if isinstance(v, (int, float))},
             **(extra or {}),
         }
         (dest / "tune.json").write_text(json.dumps(result, indent=1, default=float))
@@ -606,6 +618,12 @@ def format_sweep(key: str, rows: list[dict]) -> str:
                 f"{_f(fu['pm'], '{:.0f}'):>6s}°  {w['pm']:4.0f}/{w['ms']:<5.2f} [{wc:18s}] {nz:>5s}  {e['objective_db']:6.2f}  "
                 f"{(v[0] + (f' (+{len(v) - 1})' if len(v) > 1 else '')) if v else '-'}{st}")
             first = False
+    sig = [tuple((r[ax]["hover"]["fc"], r[ax]["hover"]["ms"], r[ax]["objective_db"], r[ax]["noise_vs_safe"])
+                 for ax in AXES if ax in r) for r in rows]
+    if len(rows) > 1 and len(set(sig)) == 1:
+        lines.append(f"note: every value gives identical results - {key} has no effect here. It may be inactive "
+                     "(a notch needs its *_cutoff > 0, a static lowpass is ignored while *_dyn_min_hz > 0, tpa_low_* "
+                     "needs tpa_low_always = ON, dyn idle below the natural idle), or not modelled (see `coverage`).")
     return "\n".join(lines)
 
 
@@ -624,7 +642,10 @@ def format_grid(res: dict) -> str:
                 nz = "-" if e["noise"] is None else f"{e['noise']:.2f}"
                 row += f"{'ok ' if e['ok'] else 'NO '}{_f(e['hover_ms'], '{:.2f}')}/{e['worst_pm']:.0f} {nz} {e['obj']:.2f}".rjust(24)
             out.append(row)
-    out.append("\nNO = violates a limit on that axis (see `assess` of the cell for which).")
+    why = [(c[k1], c[k2], ax, e["first_violation"]) for c in res["cells"] for ax, e in c["axes"].items() if not e["ok"]]
+    if why:
+        out.append("\nwhy NO (first violation per cell):")
+        out += [f"  {k1}={a} {k2}={b} {ax}: {v}" for a, b, ax, v in why]
     return "\n".join(out)
 
 

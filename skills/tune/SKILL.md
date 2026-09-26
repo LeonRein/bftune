@@ -213,7 +213,8 @@ next, when:
 - or the last iteration was already below these thresholds.
 
 When the noise budget is what limits the quad and its motors come down cold, the next real step is a
-**noise-headroom flight** (`bftune:filters-noise`), not more fine-tuning.
+**noise-headroom flight** (`bftune:filters-noise`), not more fine-tuning. Hardware comes first: with a
+known hardware issue (bent arm, damaged prop, a motor stall), fix it before any headroom flight.
 
 ## 6. Learn from the flight
 
