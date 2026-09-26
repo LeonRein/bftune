@@ -135,8 +135,13 @@ def flight_profile(fl: Flight) -> dict:
     armed = fl.mode(0)
     thr = fl.throttle[armed] if armed.any() else fl.throttle
     rx, rx_src = rx_rate(fl)
+    low = armed & (fl.throttle < max(0.05, 0.5 * thr_h))
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], low.astype(int), [0]])))
+    dur = (edges[1::2] - edges[::2]) / fl.fs
+    dur = dur[dur > 0.05]
     return {
         "hover_throttle": round(thr_h, 3),
+        "idle_duration_p75_s": round(float(np.percentile(dur, 75)), 2) if len(dur) >= 5 else None,
         "hover_motor_hz": None if hz_h is None else round(hz_h, 1),
         "control_bandwidth_hz": round(fc, 1), "control_bandwidth_source": fc_src,
         "throttle_pct": {str(q): round(float(np.percentile(thr, q)), 3) for q in (50, 75, 90, 99)} if thr.size else {},

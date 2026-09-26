@@ -11,7 +11,8 @@ quad's logs, dump and pilot? The decisions and the rule are in `docs/knowledge-s
 - **Robust variants from the data:** the gain spread between chirp rounds (5": ±11 % over 8 rounds), never
   narrower than ±10 %; widen them with `targets`, never narrow them.
 - **As-flown step response for every candidate:** the model replays the pilot's logged setpoint (recorded after
-  RC smoothing) through the same estimator as the measurement. `assess`, `sweep --steps`, `ff` and the report show
+  RC smoothing) through the same estimator as the measurement, with the I-term active (on synthetic twins with
+  known truth a relaxed-I replay predicted 0 % overshoot where the twin showed 25-40 %). `assess`, `sweep --steps`, `ff` and the report show
   it; the new target `peak_max` defaults to the flown tune's own peak. The typical/fast stick-move tests use the
   pilot's measured moves instead of a 300 deg/s-in-50 ms flick.
 - **Data first in diagnose:** imbalance and motor noise are always reported; severities are labelled heuristics;
@@ -21,6 +22,14 @@ quad's logs, dump and pilot? The decisions and the rule are in `docs/knowledge-s
   point. Per-quad calibration lives in `quad.md` (flown tunes vs feel, noise vs motor temperature, which changes
   the pilot noticed) and drives the targets, the noise budget and the stop rule. Contradictions removed (D/P and
   I/P windows, reference-tune criterion, noise-budget rules, FF pitfall, Ms stop limit).
+- Measured on the synthetic twins: the log's control bandwidth matches the model's crossover (whoop 23.4 vs 22.3 Hz,
+  5" 16.0 vs 16.8, 10" 8.8 vs 10.6); hover motor frequency does not (a whoop's is 3.5x too high a scale). The
+  twins now fly craft-appropriate stick moves with a human rise time and log rcCommand.
+- From simulated sessions (a new 3.5" pilot, a returning 5" pilot): `emit --experiment`, `grid --steps`, `suggest`
+  constrained by the D-max cases whenever a D-max driver is on and reporting the as-flown effect, a stale-analysis
+  warning for analyses built by an older bftune, `logged`/`on quad` instead of `current`, motor imbalance on the
+  thrust scale (thrust_linear undone), resonance findings far above the control band attributed to motor lines or
+  vibration, `project next-tune-dir` ignoring date headings, a stored reason shown only next to its value.
 - Fixes: `coherent_to_hz` is contiguous; `rules.py` uses the FF targets, no unchecked rpm-weight claim, dyn idle
   p20 within the firmware range; `motor_poles` missing from log and dump is reported.
 

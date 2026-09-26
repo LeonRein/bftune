@@ -25,7 +25,10 @@ def shape_metrics(t: np.ndarray, y: np.ndarray, level: float = 1.0) -> dict:
     yn = y / level
     i = int(np.argmax(yn >= 0.5))
     t50 = t[i] if i == 0 else t[i - 1] + (0.5 - yn[i - 1]) / max(yn[i] - yn[i - 1], 1e-9) * (t[i] - t[i - 1])
-    k = int(np.argmax(yn))
+    # the peak of the response itself (within 4 x the 50 % time + 10 ms): on slow quads a later I-term hump would
+    # otherwise take over the maximum and make the number jump between candidates
+    k_end = max(int(np.searchsorted(t, 4 * t50 + 0.01)), i + 2)
+    k = int(np.argmax(yn[:k_end]))
     end = int(np.searchsorted(t, t[k] + 0.1))
     dip = float(np.min(yn[k:max(end, k + 1)]))
     return {"delay_50_ms": float(t50 * 1000), "overshoot_pct": float(max(0.0, (yn[k] - 1) * 100)),
@@ -48,11 +51,13 @@ def step_windows(fl: Flight, axis: int, win_s: float = 2.0, min_sp_rms: float = 
 
 
 def step_estimate(x: np.ndarray, y: np.ndarray, starts: list[int], fs: float, win_s: float = 2.0,
-                  resp_s: float = 0.5) -> dict | None:
-    """Wiener deconvolution of setpoint x -> gyro y over the given windows, integrated to a normalised step."""
+                  resp_s: float = 0.5, fixed: bool = False) -> dict | None:
+    """Wiener deconvolution of setpoint x -> gyro y over the given windows, integrated to a normalised step.
+    `fixed=True` keeps every given window (no plausibility filter): for comparing candidates on the exact windows
+    the measurement accepted (`used` in the result), so the set can't change between candidates."""
     n, m = int(win_s * fs), int(resp_s * fs)
     w = np.hanning(n)
-    steps = []
+    steps, used = [], []
     for s in starts:
         xs, ys = x[s : s + n], y[s : s + n]
         if len(xs) < n:
@@ -64,8 +69,9 @@ def step_estimate(x: np.ndarray, y: np.ndarray, starts: list[int], fs: float, wi
         # the settled level is biased low (little setpoint power near DC after windowing), so only the shape
         # and timing are meaningful: normalise each window by its own settled level, drop implausible ones
         level = st[-m // 4 :].mean()
-        if 0.3 < level < 1.5:
+        if (fixed and abs(level) > 1e-3) or 0.3 < level < 1.5:
             steps.append(st / level)
+            used.append(int(s))
     if len(steps) < 3:
         return None
     S = np.array(steps)
@@ -79,6 +85,7 @@ def step_estimate(x: np.ndarray, y: np.ndarray, starts: list[int], fs: float, wi
         "step": mean,
         "std": S.std(axis=0),
         "n": len(steps),
+        "used": used,
         **shape_metrics(t, mean, ss),
         "steady_state": float(ss),  # ~1 by construction (normalised)
         "se": se,

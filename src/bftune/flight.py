@@ -247,7 +247,7 @@ def summarize(fl: Flight) -> FlightSummary:
         low = armed & (fl.throttle < 0.03)
         if low.sum() > 100:
             mh = fl.motor_hz[low].mean(axis=1)
-            idle_q = {q: float(np.percentile(mh, q)) for q in (10, 20, 25, 50)}
+            idle_q = {q: float(np.percentile(mh, q)) for q in (5, 10, 20, 25, 50)}
     return FlightSummary(
         loop_hz=fl.loop_hz, fs=fl.fs, log_ratio=fl.log_ratio, cfg=fl.cfg, headers=dict(fl.log.headers),
         thr_grid=grid, hz_grid=hz, sq_fit=np.asarray(sq), n_motors=m, idle_q=idle_q,

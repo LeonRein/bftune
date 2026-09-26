@@ -19,7 +19,7 @@ commands print human-readable text; most accept `--json`. Paths below:
 | `bftune project next-tune-dir P` / `latest-tune-dir P` | instant | creates and prints `P/tunes/NN-date` for the next iteration / prints the newest one (shell variables don't survive between tool calls: call this instead of storing the path in a file) |
 | `bftune tunes LOG [LOG2 ...] [--dump D] [--keys k1,k2] [--json]` | instant | groups logs by the tune they flew (headers only), the settings that differ between the groups, and whether the dump matches a log's tune or none (= the quad runs an unlogged tune). `--keys` prints those settings per log (which tune did this log fly?). Run it first. |
 | `bftune applied TUNE_CLI NEW_DUMP [--old OLD_DUMP]` | instant | after the pilot pasted a tune: are all delivered settings on the quad, is the right profile active, and what else changed between the dumps (settings reset or changed by hand). Exit 1 if something is missing. |
-| `bftune motors LOG [LOG2 ...]` | 3-10 s/log | motor health: every rpm collapse classified as `stall` (commanded up, rpm fell: ESC/prop/bearing problem), `mixer` (commanded down in hard moves: normal) or `crash`; rpm per command per motor (weak motor), telemetry jitter, hover command share |
+| `bftune motors LOG [LOG2 ...] [--exclude T0:T1]` | 3-10 s/log | motor health: every rpm collapse classified as `stall` (commanded up, rpm fell: ESC/prop/bearing problem), `mixer` (commanded down in hard moves: normal) or `crash` (with times); rpm per command per motor, telemetry jitter, hover command share. Different rpm per command with equal hover commands = motors or props that load differently (a chipped or mismatched prop, a different motor), not a CG issue |
 | `bftune inspect LOG [--dump D]` | 2-10 s | sessions, duration, log rate, debug mode, chirp runs per axis (reconstructed or not), warnings |
 | `bftune diagnose LOG [LOG2 ...] [--dump D] [-v] [--json]` | 3-10 s/log | findings (id, severity, evidence, causes, knobs); works without chirps; compare several logs of one quad |
 | `bftune errspec LOG [LOG2 ...] [--by-throttle T] [--exclude T0:T1]` | 3-10 s/log | free-flight tracking-error spectrum per band and axis, plus how hard each flight was flown (stick RMS, throttle percentiles, motor saturation). A bump near the model's `ms_hz` is the sensitivity peak (a 5" shows it around 30-60 Hz). A flat shift in every band with more stick activity is flying style. Split at the hover throttle (`brief` → `flight_profile`). |
@@ -34,7 +34,8 @@ Options shared by the log tools: `--exclude T0:T1` (repeatable) on `analyze`, `d
 accepts a CLI dump/diff **or a log** whose header is the tune on the quad now.
 
 ## The fast workbench (about 1 s per call, needs `A`)
-`--style freestyle|race|cinematic|longrange` and `--noise-budget X` (after the subcommand:
+`targets --set style=longrange` stores a style preset. `--style freestyle|race|cinematic|longrange`
+and `--noise-budget X` (after the subcommand:
 `bftune sweep --noise-budget 1.5 -o A ...`) override the stored targets for one call; normally set
 them once with `bftune targets` (below). An analysis built by an older bftune is flagged
 ("STALE ANALYSIS" in `brief`, a note in `assess`): re-run `analyze`.

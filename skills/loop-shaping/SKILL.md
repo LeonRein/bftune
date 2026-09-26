@@ -32,7 +32,8 @@ never rules. Replace them with this quad's evidence.
 2. **Apply the ranked priorities.** Tighten what the top priority needs and relax what it doesn't:
    - stick response / latency: allow a higher `peak_max` (more FF), accept a smaller Ms margin;
    - locked-in: more tracking weight and I (`tracking_weight`, `i_over_p`), hover Ms where the pilot
-     felt it hold;
+     felt it hold. The linear model scores I and wind rejection weakly (the objective barely moves with
+     I): use the lowest `errspec` bands of this quad's logs and the pilot's words as the evidence;
    - propwash: raise `idle_weight`, keep hover/idle Ms where the pilot felt no wobble;
    - smoothness: lower `ms_max` and `peak_max`;
    - clean punch-outs: margin on the `full/*` and `mid/*` cases (TPA), anti-gravity;
@@ -65,7 +66,10 @@ wants. A violation there reads "BELOW THE SAFETY FLOOR". The robust variants can
 - **Idle limits relative to the flown tune.** At very low rpm the motor lag is extrapolated, and some
   quads (large props, low idle) can't reach the idle design limits at all. When the tune that flew
   already misses them, the idle cases only require "no worse than the flown tune" (`assess` notes
-  this). Judge idle by improvement, and never chase the absolute idle limits with P/I cuts.
+  this); if the flown tune has no idle crossover at all (almost no authority, common on whoops), PM
+  is not compared there. Idle margins count only above `idle_f_min`: a full period must fit into a
+  typical idle stretch measured in the log (a dive, a chop), so slow I-term dynamics at idle don't
+  count. Judge idle by improvement, and never chase the absolute idle limits with P/I cuts.
 - **The worst-case label points to the knob:** `full/…` → TPA; `idle/…` → D, thrust_linear, dyn idle;
   `hover/…` → P/D balance and filter lag; `…/dmax` → d_max; `dn@min` → `dyn_notch_min_hz`.
 - `obj` (lower is better) is the mean dB |S| over `perf_band` at idle, hover and mid, plus a tracking
@@ -102,7 +106,9 @@ so `d_max_gain = 0` alone does not keep D at base; only `d_max = d` does (pid.c)
 
 D-max pays off when base D is noise-limited well below the damping optimum. If P/D already sit at
 the Ms limit, extra D raises the sensitivity peak (the crossover moves into the delay region); then
-keep d_max = D. Sweep it from D upward; the `/dmax` cases must pass.
+keep d_max = D. Sweep it from D upward; the `/dmax` cases must pass. D-max also damps stick moves:
+after removing or lowering it, re-check the as-flown peak (`ff`), which can rise (seen on a whoop
+twin: 58 → 83 %). The noise model scores base D; the boost adds D, and noise, only during moves.
 
 ## High and low throttle
 - **TPA:** the plant gain grows with rpm, so full throttle has the least margin. `tpa_mode PD`

@@ -198,8 +198,10 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     from .analysis.logstep import step_windows
 
     # the pilot's own setpoint and the estimator windows: the workbench replays them through any candidate tune
+    # the windows the measured step accepted: model replays use exactly these, for every candidate
     an.extra["replay"] = {"fs": float(fl.fs), "setpoint": fl.setpoint[:, :3].astype(np.float32),
-                          "starts": {a: step_windows(fl, a) for a in range(3)}}
+                          "starts": {a: (steps[AXES[a]]["used"] if AXES[a] in steps else step_windows(fl, a))
+                                     for a in range(3)}}
     for pth in safe_logs or []:
         an.safe.append((f"safe:{Path(pth).name}", safe_tune_from_log(pth)))
     for pth in safe_cli or []:

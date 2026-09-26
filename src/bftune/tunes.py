@@ -32,6 +32,14 @@ def log_tunes(paths: list[str]) -> list[tuple[str, dict[str, str], dict[str, str
     keys = tuning_keys()
     out = []
     for p in paths:
+        if str(p).endswith(".pkl"):  # synthetic flight (bftune synth): its config stands in for the header
+            import pickle
+
+            with open(p, "rb") as fh:
+                fl = pickle.load(fh)
+            out.append((Path(p).name, {k: str(v) for k, v in fl.cfg.values.items() if k in keys},
+                        {"debug_mode": "synthetic", "log_rate": str(fl.log_ratio), "bytes": 0}))
+            continue
         data = Path(p).read_bytes()
         ranges = split_logs(data)
         for i, (a, b) in enumerate(ranges):

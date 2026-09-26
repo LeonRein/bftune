@@ -150,7 +150,7 @@ def default_tune(spec: CraftSpec, target_pm: float = 40.0, target_gm_db: float =
                 if np.isfinite(m.pm) and m.pm >= target_pm and m.gm_db >= target_gm_db and (best is None or m.fc > best[0]):
                     best = (m.fc, g)
         g = best[1] if best else (rp, ri, rd, rdm)
-        g = tuple(max(1, int(round(x * 0.9))) if x else 0 for x in g)
+        g = tuple(min(250, max(1, int(round(x * 0.9)))) if x else 0 for x in g)  # firmware range 0-250 (settings.c)
         t.update(**{f"p_{name}": g[0], f"i_{name}": g[1], f"d_{name}": g[2], f"d_max_{name}": max(g[2], g[3]),
                     f"f_{name}": 100})
     return t

@@ -143,3 +143,10 @@ def test_profile_replay_and_as_flown_step(twin, tmp_path: Path):
     assert wb.peak_max.get("roll") is not None
     b = brief(wb)
     assert b["flight_profile"]["hover_throttle"] == prof["hover_throttle"]
+
+
+def test_tunes_reads_synthetic_logs(twin):
+    from bftune.tunes import group_tunes
+
+    res = group_tunes([str(twin[1])])
+    assert len(res["groups"]) == 1 and res["groups"][0]["sessions"] == ["twin.pkl"]

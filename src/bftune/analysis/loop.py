@@ -35,7 +35,12 @@ def freq_grid(f_max: float, n: int = 700, f_min: float = 0.5) -> np.ndarray:
     return np.geomspace(f_min, f_max, n)
 
 
-def metrics(f: np.ndarray, L: np.ndarray) -> LoopMetrics:
+def metrics(f: np.ndarray, L: np.ndarray, f_min: float = 0.0) -> LoopMetrics:
+    """Margins of the loop L(f). `f_min` ignores frequencies below it (the idle case: a quad never stays at idle
+    long enough for slower dynamics to matter)."""
+    if f_min > 0:
+        m = f >= f_min
+        f, L = f[m], L[m]
     mag = np.abs(L)
     S = 1 / (1 + L)
     T = L * S
@@ -206,7 +211,7 @@ def step_metrics(res: dict) -> dict:
     settle_idx = np.flatnonzero(np.abs(yn - 1) > 0.05)
     settle = t[settle_idx[-1]] if len(settle_idx) else 0.0
     # tracking lag: time shift minimizing error between setpoint and gyro
-    lags = np.arange(0, int(0.05 / (t[1] - t[0])))
+    lags = np.arange(0, int(0.05 / (t[1] - t[0])))  # >= 0; a lead (strong FF) shows as 0 here, see as-flown
     errs = [np.mean((y[k:] - sp[: len(sp) - k]) ** 2) for k in lags]
     lag = lags[int(np.argmin(errs))] * (t[1] - t[0])
     # end-to-end latency the pilot feels: gyro vs the raw stick (includes RC smoothing)

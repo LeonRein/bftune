@@ -55,6 +55,7 @@ class Goals:
     ff_overshoot_flick: float = 10.0  # feedforward targets (% overshoot of a 300 deg/s flick / a fast snap)
     ff_overshoot_snap: float = 15.0
     peak_max: tuple | None = None  # as-flown step peak per axis [%]; None = the flown tune's own (workbench)
+    idle_f_min: float = 0.0  # idle margins count above this [Hz]; the workbench derives it from the log
     mid_throttle: float = 0.5  # the "mid" design case; the workbench sets it from the throttle the pilot uses
     gain_uncertainty: float = 0.10  # robust variants: plant gain x(1+u) and /(1+1.25u), delay +y ms (identification)
     delay_uncertainty_ms: float = 0.3
@@ -76,6 +77,7 @@ class Case:
     weight: float  # objective weight (0 = constraint only)
     robust: bool  # True: relaxed limits (uncertainty variant)
     limits: dict | None = None  # per-case override {"pm", "gm", "ms"} (idle cases relative to the flown tune)
+    f_min: float = 0.0  # margins count only above this frequency (idle: 1 / how long idle stretches last)
 
 
 @dataclass
@@ -134,19 +136,20 @@ def build_cases(fl: FlightSummary, idn: Identification, tune: Tune, axis: int, g
         for boost in ((0.0, 1.0) if dmax_active else (0.0,)):
             op = OperatingPoint(throttle=thr, motor_hz=list(mhz), vbat=ai.op.vbat, d_boost=boost, dyn_notch_hz=dn,
                                 label=f"{label}/d{'max' if boost else ''}")
-            cases.append(Case(op.label, op, dict(base.params), base.structure, w if boost == 0 else 0.0, False))
+            fmin = goals.idle_f_min if label == "idle" else 0.0
+            cases.append(Case(op.label, op, dict(base.params), base.structure, w if boost == 0 else 0.0, False, None, fmin))
             # uncertainty variants (constraint only)
             u, dT_ = goals.gain_uncertainty, goals.delay_uncertainty_ms / 1000.0
             for vf, dT, tag in ((1.0 + u, dT_, "hiK+delay"), (1.0 / (1.0 + 1.25 * u), 0.0, "loK")):
                 p = dict(base.params)
                 p["K"] *= vf
                 p["T"] += dT
-                cases.append(Case(f"{op.label}/{tag}", op, p, base.structure, 0.0, True))
+                cases.append(Case(f"{op.label}/{tag}", op, p, base.structure, 0.0, True, None, fmin))
             # dyn notch at its minimum (it wanders): constraint only
             if tune.dyn_notch_enabled(fl.loop_hz) and dn is not None:
                 opw = copy.copy(op)
                 opw.dyn_notch_hz = None
-                cases.append(Case(f"{op.label}/dn@min", opw, dict(base.params), base.structure, 0.0, True))
+                cases.append(Case(f"{op.label}/dn@min", opw, dict(base.params), base.structure, 0.0, True, None, fmin))
     return cases
 
 
@@ -236,13 +239,13 @@ class AxisProblem:
         for c, (gp, gi, gd), (rp, ri) in zip(self.cases, self.B, self.R):
             kd_eff = kd * (1 + c.op.d_boost * (dmax_ratio - 1))
             L = kp * gp + ki * gi + kd_eff * gd
-            M = metrics(self.f, L)
+            M = metrics(self.f, L, c.f_min)
             # small internal safety margin so integer rounding cannot push the result over a limit
             lim = case_limits(c, g)
             pm_min, gm_min, ms_max = lim["pm"] + 1.5, lim["gm"] + 0.3, lim["ms"] - 0.04
             if not np.isfinite(M.pm):
                 # no gain crossover: loop gain < 1 everywhere (no authority) or > 1 everywhere
-                pm = 90.0 if np.max(np.abs(L)) < 1 else -90.0
+                pm = 90.0 if np.max(np.abs(L[self.f >= c.f_min])) < 1 else -90.0
             else:
                 pm = M.pm
             penalty += max(0.0, pm_min - pm) ** 2 / 25.0

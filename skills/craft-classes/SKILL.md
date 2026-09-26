@@ -36,7 +36,10 @@ filter removes.
   - RPM telemetry needs ESC firmware with bidirectional DShot (Bluejay, AM32, ...); brushed
     whoops have none (see below). Check for eRPM in the log;
   - authority saturates easily, so watch `motor_saturation`;
-  - thrust_linear is especially useful.
+  - thrust_linear and dyn idle can help low-throttle authority: test them with the model (the idle
+    case at a whoop's short idle stretches);
+  - motors on 1S whoops run warm on any tune (average current, not noise): calibrate the noise
+    budget on this quad's history ("warm like always" is its normal), not on the temperature table.
 - **2.5-5":**
   - the standard case;
   - frame resonances are common on freestyle frames: the spectrogram and `noise` persistent peaks
@@ -48,7 +51,10 @@ filter removes.
   - motor lag and delay are large, so crossovers are low: don't chase 5" numbers;
   - `rpm_filter_min_hz` must sit below the idle motor frequency measured in the log;
   - structural modes can sit close to crossover: check `resonance_*` and `noise` persistent peaks;
-  - use gentler TPA, and I matters more (wind).
+  - let the model pick TPA mode and rate (on a 10" twin D-only TPA kept D's phase lead at full
+    throttle); I matters more in wind, which the model scores weakly (see loop-shaping);
+  - `motor-model tau ... vs axis fit` notes are common: the axis fit lumps other lags into τ; only
+    the motor model's trend with speed is used, so it is a note, not a failure.
   - The chirp end is 120 Hz and the amplitude lower (`bftune:flight-plan`).
 
 ## Special setups

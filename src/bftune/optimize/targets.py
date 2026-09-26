@@ -18,6 +18,8 @@ import json
 from dataclasses import asdict, fields
 from pathlib import Path
 
+import numpy as np
+
 # never relaxed: hover / mid / full-throttle cases must stay inside these (idle is judged vs the flown tune)
 SAFETY_FLOOR = {
     "pm_min": 30.0, "gm_min_db": 4.0, "ms_max": 2.6,  # nominal cases
@@ -36,7 +38,11 @@ def data_profile_targets(profile: dict | None) -> dict:
     hov = profile.get("hover_throttle") or 0.3
     if p90 is None:
         return {}
-    return {"mid_throttle": round(float(min(0.85, max(p90, hov + 0.1))), 2)}
+    out = {"mid_throttle": round(float(min(0.85, max(p90, hov + 0.1))), 2)}
+    d = profile.get("idle_duration_p75_s")
+    if d:  # a full period must fit into a typical idle stretch (dive, chop) for a sensitivity peak to matter there
+        out["idle_f_min"] = round(float(np.clip(1.0 / d, 0.5, 5.0)), 2)
+    return out
 
 
 def data_bands(flown_hover_fc: float | None) -> dict:
@@ -62,7 +68,7 @@ STYLE_DEFAULTS = {
 # only these fields are design targets (the rest of Goals are internal weights)
 TARGET_KEYS = ("ms_max", "ms_max_robust", "pm_min", "pm_min_robust", "gm_min_db", "gm_min_robust_db", "dm_min_ms",
                "noise_budget", "d_over_p", "i_over_p", "perf_band", "tracking_band", "idle_weight",
-               "ff_overshoot_flick", "ff_overshoot_snap", "dmax_ratio_max", "hf_extrapolation", "peak_max", "mid_throttle",
+               "ff_overshoot_flick", "ff_overshoot_snap", "dmax_ratio_max", "hf_extrapolation", "peak_max", "mid_throttle", "idle_f_min",
                "tracking_weight", "gain_range", "gain_uncertainty", "delay_uncertainty_ms")
 
 
@@ -135,7 +141,7 @@ def build_goals(style: str | None, flown_hover_fc: float | None = None, override
         src[k] = "from the flown tune's crossover"
     for k, v in data_profile_targets(profile).items():
         setattr(g, k, v)
-        src[k] = "from the log (p90 throttle)"
+        src[k] = "from the log (p90 throttle)" if k == "mid_throttle" else "from the log (how long idle stretches last)"
     for k, v in flown_ratio_targets(flown).items():
         setattr(g, k, v)
         src[k] = "from the flown tune (I/P)" if k == "i_over_p" else "convention, widened to the flown tune's D/P"

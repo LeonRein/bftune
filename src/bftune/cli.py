@@ -76,6 +76,11 @@ def cmd_inspect(a) -> int:
         for r in find_chirps(fl):
             print(f"    chirp {AXES[r.axis]:5s} t={fl.t[r.start]:6.1f}s {r.f_start:.1f}->{r.f_end:.0f} Hz thr {r.throttle:.2f}"
                   f"{' (angle/horizon)' if r.level_mode else ''}{' (reconstructed)' if r.reconstructed else ''}")
+        ch = {k: cfg.values.get(k) for k in ("chirp_amplitude_roll", "chirp_amplitude_pitch", "chirp_amplitude_yaw",
+                                             "chirp_frequency_start_deci_hz", "chirp_frequency_end_deci_hz",
+                                             "chirp_time_seconds") if cfg.values.get(k) is not None}
+        if ch:
+            print("    chirp settings: " + ", ".join(f"{k.replace('chirp_', '')} {v}" for k, v in ch.items()))
         if cfg.mismatch:
             print(f"    warning: the dump does not belong to this log: {len(cfg.mismatch)} tuning settings differ "
                   f"(e.g. {', '.join(f'{k} {h}->{d}' for k, h, d in cfg.mismatch[:4])}). The model uses the log's own "
@@ -350,7 +355,7 @@ def cmd_targets(a) -> int:
         from .workbench import Workbench
 
         ass = Workbench(Path(a.out)).assess(wb.logged, steps=False)
-        viol = [f"{ax}: {v}" for ax, e in ass["axes"].items() for v in e["violations"]]
+        viol = [f"{ax}: {v}" for ax, e in ass["axes"].items() for v in e["violations"]] + ass.get("noise_violations", [])
         print(f"\nflown tune under these targets: {ass['verdict']}" + ("" if not viol else f" ({len(viol)} violated: "
               + "; ".join(viol[:4]) + (" ..." if len(viol) > 4 else "") + ")")
               + ". Re-run `brief`/`assess` for everything else: earlier outputs used the old targets.")

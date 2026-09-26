@@ -385,7 +385,7 @@ def throttle_punch(fl: Flight) -> list[Finding]:
     for a, b in _segments(ok, int(0.5 * fl.fs)):
         el[a:b] = sosfiltfilt(sos, e[a:b], axis=0)
     n = int(0.2 * fl.fs)
-    punch, calm = [], []
+    punch, calm, at = [], [], []
     for a, b in _segments(ok, 2 * n):
         for s in range(a, b - n, n // 2):
             sp = np.std(fl.setpoint[s : s + n, :2])
@@ -394,6 +394,7 @@ def throttle_punch(fl: Flight) -> list[Finding]:
             rms = float(np.sqrt(np.mean(el[s : s + n] ** 2)))
             if np.max(dthr[s : s + n]) > 3.0:
                 punch.append(rms)
+                at.append((rms, float(fl.t[s])))
             elif abs(np.mean(dthr[s : s + n])) < 0.3:
                 calm.append(rms)
     if len(punch) < 3 or len(calm) < 3:
@@ -404,7 +405,7 @@ def throttle_punch(fl: Flight) -> list[Finding]:
                     f"low-frequency attitude error during fast throttle rises: {np.median(punch):.1f} deg/s "
                     f"({r:.1f}x calm, {len(punch)} windows, sticks near centre)",
                     {"punch_rms_deg_s": round(float(np.median(punch)), 2), "ratio_to_calm": round(r, 2),
-                     "windows": len(punch)},
+                     "windows": len(punch), "worst_at_s": [round(t, 1) for _, t in sorted(at, reverse=True)[:3]]},
                     ["I-term too slow for throttle-induced torque changes", "CG offset / motor imbalance"],
                     ["anti_gravity_gain (and anti_gravity_p_gain)", "I", "fix CG first if motor_imbalance is reported"])]
 

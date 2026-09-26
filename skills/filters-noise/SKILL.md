@@ -19,9 +19,12 @@ filter chains and aliasing. That spectrum predicts the noise *at the motors* (P+
 thrust_linear slope) for any candidate. "Noise" is everything above this quad's control band
 (3.7 × the control bandwidth measured in the log: 70 Hz on a 5", lower on a 10").
 
-**Budget.** Per throttle band and axis, a candidate's predicted motor noise is compared with the
-level of the **reference**: the highest level among the logged tune and every
-`--safe-log`/`--safe-cli` tune of the same quad, in that band and axis. The allowed multiple, `noise_budget`, is a design target **you derive for this quad**:
+**Budget.** Per throttle band, a candidate's predicted noise **at the motors** (roll, pitch and yaw
+together, as the mixer adds them) is compared with the **reference**: the highest level among the
+logged tune and every `--safe-log`/`--safe-cli` tune of the same quad. The per-axis ratios
+(`noise × safe`) are shown for orientation: an axis with little absolute noise (yaw, usually) may
+exceed its own ratio when the total stays in budget. `suggest` keeps every axis within the budget
+(conservative); `sweep`/`grid` on one axis judge that axis alone. The allowed multiple, `noise_budget`, is a design target **you derive for this quad**:
 
 1. **Build the quad's own calibration** in `quad.md` → "Constraints": for every tune that flew, its
    noise relative to the reference (`assess --with-safe` → `noise × safe`, and `diagnose` →

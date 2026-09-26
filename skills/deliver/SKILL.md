@@ -20,10 +20,13 @@ user-invocable: false
      - the `simplified_*` = OFF guard (otherwise the Configurator's sliders overwrite explicit values);
      - master settings, then `profile N`, then `save`;
      - ranges validated against the firmware table (`tune.json.problems` must be empty).
-   - **No dump:** the profile index and slider state are unknown. `tune_cli.txt` then contains a
-     `profile` placeholder line that the pilot must edit. The revert block leaves out the
-     `simplified_*` lines, so the pilot's `diff all` backup is the real way back. Say both
-     explicitly.
+   - **No dump:** the profile index is unknown; `tune_cli.txt` then contains a `profile` placeholder
+     line the pilot must edit, unless you pass `--profile N` (from the project's older dumps,
+     confirmed by the pilot). The slider state comes from the log header when there is one; the
+     pilot's `diff all` backup stays the real way back. Say so explicitly.
+   - Range problems (`tune.json.problems`, printed by `emit`) must be empty for the tune. If only the
+     revert block has them (values the firmware would reject), tell the pilot to use their `diff all`
+     backup instead of the revert block.
 2. **Tell the pilot, in this order and briefly:**
    1. The CLI block to paste into the Configurator's CLI tab, ending with `save`. Tell them to back
       up first with `diff all`.

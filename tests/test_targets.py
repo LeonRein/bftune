@@ -57,3 +57,23 @@ def test_chirp_uncertainty_from_round_spread():
     u2 = chirp_uncertainty({0: SimpleNamespace(round_gains=[1.01, 0.99])})
     assert u2["k_hi"] == 1.1 and "floor" in u2["source"]  # never narrower than the convention
     assert chirp_uncertainty({0: SimpleNamespace(round_gains=[])})["source"].startswith("convention")
+
+
+def test_idle_f_min_from_idle_stretches():
+    from bftune.optimize.targets import build_goals
+
+    g, src = build_goals("freestyle", 20.0, None, None, {"hover_throttle": 0.3, "throttle_pct": {"90": 0.5},
+                                                          "idle_duration_p75_s": 0.4})
+    assert g.idle_f_min == 2.5 and "idle" in src["idle_f_min"]
+
+
+def test_metrics_ignore_frequencies_below_f_min():
+    import numpy as np
+
+    from bftune.analysis.loop import metrics
+
+    f = np.geomspace(0.5, 200, 400)
+    s = 2j * np.pi * f
+    L = 40 / s * np.exp(-s * 0.002) + 3 / s**2  # an I-like low-frequency hump plus a real crossover
+    full, cut = metrics(f, L), metrics(f, L, f_min=2.0)
+    assert np.isfinite(cut.fc) and cut.fc >= 2.0 and cut.ms <= full.ms + 1e-9

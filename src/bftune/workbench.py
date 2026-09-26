@@ -295,7 +295,7 @@ class Workbench:
         T, H_sp, _ = reference_fr(tune, axis, self._plant_for(axis, tune), op, f, self.idn.dt, self.src.loop_hz,
                                   self.rx_hz, self.idn.time_scale, relax_i=relax_i)
         y = np.fft.irfft(T / H_sp * np.fft.rfft(sp - sp.mean()), n) + sp.mean()
-        return step_estimate(sp, y, rp["starts"][axis], rp["fs"])
+        return step_estimate(sp, y, rp["starts"][axis], rp["fs"], fixed=True)
 
     def axis_problem(self, tune: Tune, axis: int, relax_idle: bool = True, search: bool = False) -> AxisProblem:
         cases = build_cases(self.src, self.idn, tune, axis, self.goals, search=search)
@@ -332,6 +332,8 @@ class Workbench:
                 continue
             lim = case_limits(c, self.goals)
             pm0 = ref.get("pm_eff", ref["pm"])
+            if pm0 != pm0:  # no gain crossover at idle in the flown tune (almost no authority): PM can't be compared
+                pm0 = -180.0
             if pm0 >= lim["pm"] and ref["gm_db"] >= lim["gm"] and ref["ms"] <= lim["ms"]:
                 continue  # the flown tune meets the design limits here: keep them
             c.limits = {"pm": min(lim["pm"], pm0 - 2.0), "gm": min(lim["gm"], ref["gm_db"] - 0.5),
@@ -349,11 +351,11 @@ class Workbench:
         # the flown tune's own noise has flown: never force a cut below it (unless the budget was lowered
         # explicitly below 0.9, i.e. hot motors). The 0.9 margin guards going *above* what flew.
         viol = violations(rows, self.goals, None)
+        noise_bands = None
         if has_noise:
-            limit = self.noise_limit(axis)
-            if nr > limit + 1e-3:
-                why = "the flown tune's level" if limit > self.goals.noise_budget else "budget"
-                viol.append(f"motor noise {nr:.2f}x proven-safe level (limit {limit:.2f}x: {why})")
+            from .model.params import DTERM_SCALE, PTERM_SCALE
+
+            noise_bands = (prob.noise(PTERM_SCALE * tune.i(f"p_{ax}"), DTERM_SCALE * d), np.asarray(self.noise_ref[axis]))
         if self.relative_gate:
             viol = self._relative_violations(axis, rows, viol)
         res = {
@@ -368,10 +370,33 @@ class Workbench:
             "noise_vs_safe": round(float(nr), 3) if prob.noise_Q is not None and self.noise_ref else None,
             "coherent_to_hz": round(self.idn.axes[axis].coherent_to_hz, 1),
             "idle_limits_from_flown": any(r.get("relaxed") for r in rows),
+            "_noise_bands": noise_bands,  # (candidate, reference) per throttle band: the verdict sums the axes
         }
         if steps:
             res["step"] = self.step_metrics(tune, axis)
         return res
+
+    @staticmethod
+    def _motor_noise(per: dict) -> float | None:
+        """Noise at the motors, all axes together (each motor's command carries roll +- pitch +- yaw through the
+        mixer; uncorrelated axes add in power), relative to the reference, worst throttle band."""
+        nb = [e.get("_noise_bands") for e in per.values()]
+        if len(nb) < 3 or any(x is None for x in nb):
+            return None
+        cand = np.sqrt(sum(c ** 2 for c, _ in nb))
+        ref = np.sqrt(sum(r ** 2 for _, r in nb))
+        return float(np.max(cand / np.maximum(ref, 1e-12)))
+
+    def motor_noise_limit(self) -> float:
+        """Allowed total motor noise (x reference): the budget, or the flown tune's own level if higher (it flew),
+        unless the budget was lowered below 0.9 on purpose (warm/hot motors)."""
+        b = self.goals.noise_budget
+        if b < 0.9:
+            return b
+        if "_logged_total" not in self.__dict__:
+            per = {AXES[a]: self.assess_axis(self.logged, a, steps=False) for a in self.idn.axes}
+            self._logged_total = self._motor_noise(per) or 0.0
+        return max(b, self._logged_total)
 
     def noise_limit(self, axis: int) -> float:
         """Allowed motor noise (x proven-safe level): the budget, or the flown tune's own level if higher
@@ -429,11 +454,12 @@ class Workbench:
         """Setting combinations the linear model can't score but real quads show (from flown logs)."""
         out = []
         floor = tune.i("dyn_idle_min_rpm") * 100 / 60.0
-        idle = max(self.src.idle_hz(10), floor)
+        low = self.src.idle_q.get(5, self.src.idle_hz(10))  # the lowest idle speeds (dives) must be notched too
+        idle = max(low, floor)
         rmin = tune.i("rpm_filter_min_hz")
         if tune.i("rpm_filter_harmonics") > 0 and tune.s("dshot_bidir") != "OFF" and rmin > 0.95 * idle:
-            out.append(f"rpm_filter_min_hz {rmin} is not below the lowest idle motor frequency with margin (idle p10 "
-                       f"~{idle:.0f} Hz" + (" = the dyn idle floor" if floor > self.src.idle_hz(10) else "")
+            out.append(f"rpm_filter_min_hz {rmin} is not below the lowest idle motor frequency with margin (idle p5 "
+                       f"~{idle:.0f} Hz" + (" = the dyn idle floor" if floor > low else "")
                        + f"; the check is min_hz > 0.95 x idle = {0.95 * idle:.0f} Hz): the motor fundamental at the lowest "
                        "speeds is not notched. It can show up as a low-throttle "
                        f"error peak near {idle:.0f} Hz. If `diagnose` shows a motor line there, lower rpm_filter_min_hz to "
@@ -442,7 +468,8 @@ class Workbench:
         bp = tune.i("tpa_breakpoint")
         hover_thr = float(np.mean([ai.op.throttle for ai in self.idn.axes.values()])) if self.idn.axes else 0.3
         if 1000 + 1000 * hover_thr > bp and tune.i("tpa_rate") > 0:
-            out.append(f"tpa_breakpoint {bp} is below hover (~{1000 + 1000 * hover_thr:.0f}): TPA already cuts gains at hover.")
+            out.append(f"tpa_breakpoint {bp} is below hover (~{1000 + 1000 * hover_thr:.0f}): TPA already cuts gains at hover. "
+                       "Raising it puts full P/D back at hover (check hover Ms and noise with `sweep tpa_breakpoint`).")
         if tune.i("d_max_roll") > tune.i("d_roll") and tune.i("d_max_gain") == 0 and tune.i("d_max_advance") == 0:
             out.append("d_max > d but d_max_gain and d_max_advance are 0: D-max never engages (set d_max = d or enable a driver).")
         return out
@@ -453,6 +480,21 @@ class Workbench:
 
         axes = list(self.idn.axes) if axes is None else axes
         per = {AXES[a]: self.assess_axis(tune, a, steps) for a in axes}
+        motor_noise, noise_viol = self._motor_noise(per), []
+        if motor_noise is not None:
+            lim = self.motor_noise_limit()
+            if motor_noise > lim + 1e-3:
+                why = "the flown tune's level" if lim > self.goals.noise_budget else "budget"
+                noise_viol.append(f"motor noise (all axes, at the motors) {motor_noise:.2f}x reference "
+                                  f"(limit {lim:.2f}x: {why})")
+        else:  # a subset of axes: judge each axis against the limit on its own (conservative)
+            for ax, e in per.items():
+                a = AXES.index(ax)
+                if e["noise_vs_safe"] is not None and e["noise_vs_safe"] > self.noise_limit(a) + 1e-3:
+                    e["violations"].append(f"motor noise {e['noise_vs_safe']:.2f}x reference (limit "
+                                           f"{self.noise_limit(a):.2f}x, this axis alone)")
+        for e in per.values():
+            e.pop("_noise_bands", None)
         g, dchain = hf_filtering(tune, self.idn, self.src.loop_hz)
         notes = []
         if g > self.goals.hf_extrapolation * self.hf_ref[0] or dchain > self.goals.hf_extrapolation * self.hf_ref[1]:
@@ -487,7 +529,7 @@ class Workbench:
             notes.append(f"idle limits on {', '.join(relaxed)} = the flown tune's idle margins (it flies, but misses the design "
                          "limits there; at very low rpm the model is least certain). Judge idle by improvement.")
         problems = validate(tune, [k for k in changed_keys(self.logged, tune) if k in tuning_keys()])
-        verdict = "PASS" if not any(e["violations"] for e in per.values()) and not problems else "FAIL"
+        verdict = "PASS" if not any(e["violations"] for e in per.values()) and not problems and not noise_viol else "FAIL"
         if self.stale:
             notes.insert(0, self.stale)
         if self.relative_gate:
@@ -497,6 +539,7 @@ class Workbench:
         return {"verdict": verdict, "gate": "relative" if self.relative_gate else "absolute",
                 "targets": {"style": self.goals.style, "overrides": overridden},
                 "axes": per, "notes": notes, "range_problems": problems,
+                "motor_noise": None if motor_noise is None else round(motor_noise, 3), "noise_violations": noise_viol,
                 "hf_filtering": {"gyro": round(g, 4), "gyro_dterm": round(dchain, 5), "safe_max": [round(x, 5) for x in self.hf_ref]}}
 
     # ----------------------------------------------------------------- exploration
@@ -544,6 +587,10 @@ class Workbench:
             ax = AXES[a]
             t = base.copy().set(f"p_{ax}", r.p).set(f"i_{ax}", r.i).set(f"d_{ax}", r.d).set(f"d_max_{ax}", r.d_max)
             chk = self.assess_axis(t, a, steps=True)
+            chk.pop("_noise_bands", None)
+            if chk["noise_vs_safe"] is not None and chk["noise_vs_safe"] > self.noise_limit(a) + 1e-3:
+                chk["violations"].append(f"motor noise {chk['noise_vs_safe']:.2f}x reference (limit "
+                                         f"{self.noise_limit(a):.2f}x on this axis)")
             r.feasible = not chk["violations"]
             s0 = self.step_metrics(base, a)
             af0, af1 = s0.get("as_flown"), chk.get("step", {}).get("as_flown")
@@ -633,6 +680,8 @@ class Workbench:
             ass[name] = self.assess(t)
         verdict = ass["new"]["verdict"]
         viol = {ax: e["violations"] for ax, e in ass["new"]["axes"].items()}
+        if ass["new"].get("noise_violations"):
+            viol["motors"] = ass["new"]["noise_violations"]
         comment = [f"style: {self.style}; model-predicted margins and noise in report.html"]
         if experiment:
             comment.append(f"EXPERIMENT: {experiment}")
@@ -682,6 +731,8 @@ class Workbench:
         log(format_assessment({"new": ass["new"]}))
         if missing:
             log("changes without a reason: " + ", ".join(missing))
+        if problems:
+            log("RANGE PROBLEMS (tune.json.problems): " + "; ".join(problems))
         files = ["tune_cli.txt", "revert_cli.txt", "report.md", "report.html", "tune.json", *plots.values()]
         log(f"wrote into {dest}: " + ", ".join(f for f in files if (dest / f).exists()))
         return result
@@ -723,6 +774,9 @@ def format_assessment(ass: dict) -> str:
                 lines.append(f"        violated: {v}")
             if len(vs) > 5:
                 lines.append(f"        ... and {len(vs) - 5} more violated cases (use --json for all)")
+        if a.get("motor_noise") is not None:
+            lines.append(f"  motor noise, all axes at the motors: {a['motor_noise']:.2f}x reference"
+                         + ("".join(f"  VIOLATED: {v}" for v in a.get("noise_violations", []))))
         for n in a.get("notes", []):
             lines.append(f"  note: {n}")
         for p in a.get("range_problems", []):
@@ -759,11 +813,11 @@ def format_sweep(key: str, rows: list[dict]) -> str:
                 f"{(v[0] + (f' (+{len(v) - 1})' if len(v) > 1 else '')) if v else '-'}{st}")
             first = False
     sig = [tuple((r[ax]["hover"]["fc"], r[ax]["hover"]["ms"], r[ax]["objective_db"], r[ax]["noise_vs_safe"],
-                  str(r[ax].get("step")))
+                  str(r[ax].get("worst")), str(r[ax].get("step")))
                  for ax in AXES if ax in r) for r in rows]
     has_steps = any("step" in r[ax] for r in rows for ax in AXES if ax in r)
     if len(rows) > 1 and len(set(sig)) == 1 and not has_steps:
-        lines.append(f"note: margins, noise and objective are identical for every value of {key}. If it acts on the stick "
+        lines.append(f"note: margins (incl. worst case), noise and objective are identical for every value of {key}. If it acts on the stick "
                      "response (feedforward_*, rc_smoothing_*, iterm_relax*), rerun with --steps; otherwise it may be "
                      "inactive (a notch needs its *_cutoff > 0, a static lowpass is ignored while *_dyn_min_hz > 0, "
                      "tpa_low_* needs tpa_low_always = ON, dyn idle below the natural idle) or not modelled (`coverage`).")
@@ -920,7 +974,7 @@ def brief(wb: Workbench) -> dict:
             "natural_idle_rpm_p20": round(src.idle_hz(20) * 60),
             "hover_motor_hz": round(float(np.mean([np.mean(ai.op.motor_hz) for ai in idn.axes.values()])), 1)
             if idn.axes else None,
-            "rx_rate_hz": src.header_int("rc_smoothing_rx_smoothed", 0),
+            "rx_rate_hz": round(wb.rx_hz),
         },
         "current_tune": {k: an.tune.values.get(k) for k in keys if k in an.tune.values},
         "tune_on_quad": None if getattr(an, "quad_tune", None) is None else {
