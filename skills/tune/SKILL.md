@@ -108,6 +108,43 @@ For long explorations (many sweeps, several layouts), you may delegate to the `t
 agent with a precise brief: analysis dir, candidate, the question, the constraints. Keep the
 conversation with the pilot and the final decisions here.
 
+### Cover every feature
+Betaflight offers much more than PIDs and lowpasses, and the best tune for *this* quad may come from
+any of them. Before deciding, run `bftune coverage -o A cand.txt`. It lists every group that shapes
+flight behaviour, with the logged and candidate values and whether the model can test it:
+- RPM filter
+- dynamic and static notches
+- gyro and D-term filters and yaw lowpass
+- P/I/D
+- D-max
+- feedforward and its shaping
+- RC smoothing
+- TPA, including low-throttle TPA
+- thrust_linear and output limit
+- throttle boost and sag compensation
+- dynamic idle
+- I-term relax and windup
+- anti-gravity
+- PID-sum limits
+- rates
+
+For **every** group, do one of these:
+- **tested `model`, `step` or `idle case`:** run at least one experiment (a `sweep`, `ff`, or
+  `suggest` on variant files), even if you then keep the logged value. For example, sweep
+  `rpm_filter_q` and `rpm_filter_weights`, `dyn_notch_q/min/count`, `yaw_lowpass_hz`,
+  `tpa_breakpoint`, `feedforward_boost` / `smooth_factor` / `averaging` with `--steps`, and
+  `rc_smoothing_auto_factor --steps`.
+- **tested `none`:** look for evidence in the flight data and the pilot report, then decide:
+  - `diagnose`: `throttle_punch_dip` → anti-gravity; `bounce_back` → I-term relax;
+    `pidsum_clipping` → limits;
+  - `errspec`;
+  - what the pilot says about throttle feel and RC link.
+
+  Keep the default or logged value when there is no evidence, and say so.
+
+Record the decision for each group in a coverage table in the worklog: changed with the numbers,
+or unchanged with the reason. Rates are the pilot's choice: never change them unasked.
+
 ## 4. Decide
 
 Choose using `bftune:loop-shaping` and `bftune:filters-noise`, weighted by what the pilot wants.
@@ -135,6 +172,8 @@ Follow `bftune:deliver`:
 - `bftune emit` into the tune folder;
 - give the pilot the CLI block, an old → new table with the reason for each change, what should
   feel different and what to watch for, the revert block, and what to log next;
+- add one short "also checked, left unchanged" list covering the groups you did not change and why
+  (from the coverage table), so the pilot sees that nothing was skipped;
 - append the iteration to `history.md`.
 
 ## 6. Learn from the flight

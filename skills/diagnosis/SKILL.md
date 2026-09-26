@@ -33,6 +33,8 @@ candidate causes. `bftune diagnose -v` gives finding ids with evidence. The mode
 | `bounce_back_<axis>` | opposite rebound after fast moves | see the table above |
 | `motor_saturation` / `motor_imbalance` | motors at their limit / uneven motor outputs at hover | Imbalance > 10-15 %: CG, bent prop, weak motor. Fix the hardware first. |
 | `possible_desync` | one motor's rpm collapsed while the others ran | Can be a telemetry glitch (one event) or a real desync. Ask about the ESC/motor, and don't raise gains until it is resolved. |
+| `throttle_punch_dip` | low-frequency attitude error while throttle rises fast, sticks centred | `anti_gravity_gain` (and `anti_gravity_p_gain`), I. Fix the CG first if `motor_imbalance` shows up too. |
+| `pidsum_clipping_<axis>` | PID sum at `pidsum_limit(_yaw)` | yaw spin-up or weak yaw: raise the limit only if motors are not saturated. Otherwise lower P/FF. |
 | `motor_hf_noise` | high-frequency content in the motor commands | heat risk indicator. Compare with other logs of the same quad. |
 | `no_chirp`, `chirp_axes_missing` | the model is low-confidence or incomplete | small relative changes; plan a chirp flight (`bftune:flight-plan`) |
 | `low_log_rate`, `low_resolution`, `corrupt_frames` | data limits | handled, but they widen uncertainty; fix for the next flight if cheap |

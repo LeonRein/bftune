@@ -35,6 +35,7 @@ Global flags: `--style freestyle|race|cinematic` and `--noise-budget 0.9`.
 | `bftune suggest -o A f1.txt [f2.txt ...] [--axis roll]` | P/I/D/d_max proposal per axis with everything else fixed (limited to ±15 % of the flown gains when there is no chirp; `feasible: false` = nothing meets every limit, the least-violating point is shown); with several files, the verdict and objective of each at its best gains (to compare filter layouts) |
 | `bftune ff -o A cand.txt --axis roll --values 60:180:10` | FF value → stick lag, flick and snap overshoot, settle time |
 | `bftune noise -o A [cand.txt]` | per throttle band: measured D and gyro noise, fit error, non-RPM peaks (persistent?), safe level, candidate |
+| `bftune coverage -o A [cand.txt] [--json]` | every flight-behaviour feature group: logged vs candidate values, `changed`, and what can test it (`model`, `step`, `idle case`, `none` = judgement from data) with a how-to hint |
 | `bftune emit -o A cand.txt [--to DIR]` | deliverables (`tune_cli.txt`, `revert_cli.txt`, `report.md/html`, `tune.json`, plots); **exit 2 = FAIL** |
 | `bftune optimize -o A_COPY` | slow automatic baseline (10-60 min). Use it only as a second opinion, in a copy of `A` |
 

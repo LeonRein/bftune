@@ -50,5 +50,13 @@ def test_workbench_session_on_synthetic_quad(tmp_path: Path):
     assert len(rows) == 2 and "roll" in rows[0] and "pitch" not in rows[0]
     sug = wb.suggest(base, [0], maxiter=8)
     assert sug["roll"]["p"] > 0
+    # motor_output_limit scales authority: lower crossover and less motor noise
+    lim = wb.assess(base.copy().set("motor_output_limit", 80), steps=False, axes=[0])["axes"]["roll"]
+    assert lim["hover"]["fc"] < a["axes"]["roll"]["hover"]["fc"]
+    # D-max cannot engage without a driver: no .../dmax cases
+    off = base.copy().set("d_max_gain", 0).set("d_max_advance", 0).set("d_max_roll", base.i("d_roll") + 10)
+    assert not any("dmax" in c.label for c in wb.axis_problem(off, 0).cases)
+    from bftune.coverage import coverage
+    assert any(r["changed"] for r in coverage(wb.logged, off))
     res = wb.emit(base, {}, log=lambda *_: None)
     assert (out / "tune_cli.txt").exists() and (out / "report.md").exists() and res["verdict"] in ("PASS", "FAIL")

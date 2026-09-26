@@ -258,6 +258,59 @@ def bounce_back(fl: Flight) -> list[Finding]:
     return out
 
 
+def throttle_punch(fl: Flight) -> list[Finding]:
+    """Attitude error during fast throttle increases vs calm cruise: what anti-gravity is for."""
+    from scipy.signal import butter, sosfiltfilt
+
+    ok = _acro_mask(fl)
+    dthr = np.gradient(fl.throttle) * fl.fs
+    sos = butter(2, 10.0, "lowpass", fs=fl.fs, output="sos")  # attitude drift band (I-term job)
+    e = fl.setpoint[:, :2] - fl.gyro[:, :2]
+    el = np.zeros_like(e)
+    for a, b in _segments(ok, int(0.5 * fl.fs)):
+        el[a:b] = sosfiltfilt(sos, e[a:b], axis=0)
+    n = int(0.2 * fl.fs)
+    punch, calm = [], []
+    for a, b in _segments(ok, 2 * n):
+        for s in range(a, b - n, n // 2):
+            sp = np.std(fl.setpoint[s : s + n, :2])
+            if sp > 40:
+                continue
+            rms = float(np.sqrt(np.mean(el[s : s + n] ** 2)))
+            if np.max(dthr[s : s + n]) > 3.0:
+                punch.append(rms)
+            elif abs(np.mean(dthr[s : s + n])) < 0.3:
+                calm.append(rms)
+    if len(punch) < 3 or len(calm) < 3:
+        return []
+    r = float(np.median(punch) / max(np.median(calm), 1e-6))
+    sev = "warn" if r > 3 and np.median(punch) > 5 else "info"
+    return [Finding("throttle_punch_dip", sev,
+                    f"low-frequency attitude error during fast throttle rises: {np.median(punch):.1f} deg/s "
+                    f"({r:.1f}x calm, {len(punch)} windows, sticks near centre)",
+                    {"punch_rms_deg_s": round(float(np.median(punch)), 2), "ratio_to_calm": round(r, 2),
+                     "windows": len(punch)},
+                    ["I-term too slow for throttle-induced torque changes", "CG offset / motor imbalance"],
+                    ["anti_gravity_gain (and anti_gravity_p_gain)", "I", "fix CG first if motor_imbalance is reported"])]
+
+
+def pidsum_clipping(fl: Flight) -> list[Finding]:
+    armed = fl.mode(0)
+    if armed.sum() < fl.fs:
+        return []
+    lim = np.array([fl.cfg.int("pidsum_limit", 500), fl.cfg.int("pidsum_limit", 500), fl.cfg.int("pidsum_limit_yaw", 400)])
+    frac = np.mean(np.abs(fl.pidsum[armed]) >= 0.98 * lim, axis=0)
+    out = []
+    for a in range(3):
+        if frac[a] > 0.005:
+            out.append(Finding(f"pidsum_clipping_{AXES[a]}", "warn" if frac[a] > 0.02 else "info",
+                               f"{AXES[a]}: PID sum at its limit {100*frac[a]:.1f} % of armed time",
+                               {"fraction": round(float(frac[a]), 4), "limit": int(lim[a])},
+                               ["authority-limited moves (yaw spin-up, hard snaps)", "too much P/FF for the craft"],
+                               ["pidsum_limit / pidsum_limit_yaw", "FF", "check motor_saturation first"]))
+    return out
+
+
 def heat_risk(fl: Flight) -> list[Finding]:
     """High-frequency content of the motor commands: the main driver of motor heat."""
     armed = fl.mode(0)
@@ -275,7 +328,8 @@ def heat_risk(fl: Flight) -> list[Finding]:
 
 def diagnose(fl: Flight) -> list[dict]:
     findings: list[Finding] = []
-    for fn in (log_quality, saturation, desync, oscillation, propwash, bounce_back, heat_risk):
+    for fn in (log_quality, saturation, desync, oscillation, propwash, bounce_back, throttle_punch, pidsum_clipping,
+               heat_risk):
         try:
             findings += fn(fl)
         except Exception as e:  # a failing heuristic must not hide the others

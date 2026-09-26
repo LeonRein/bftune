@@ -34,6 +34,7 @@ from .optimize.search import (
     build_cases,
     hf_filtering,
     optimize_axis,
+    output_limit_ratio,
     reference_noise,
     violations,
 )
@@ -150,6 +151,7 @@ class Workbench:
         y = ai.op.throttle
         p = dict(ai.plant.params)
         p["K"] *= thrust_linear_slope(tune.i("thrust_linear"), y) / thrust_linear_slope(self.idn.thrust_linear, y)
+        p["K"] *= output_limit_ratio(tune, self.idn)
         return Plant(ai.plant.structure, p)
 
     def step_metrics(self, tune: Tune, axis: int) -> dict:
@@ -157,7 +159,9 @@ class Workbench:
         from .optimize.rules import max_rate, rx_rate_hz
 
         ai = self.idn.axes[axis]
-        op = OperatingPoint(throttle=ai.op.throttle, motor_hz=ai.op.motor_hz, vbat=ai.op.vbat, d_boost=1.0,
+        # during a stick move D rises toward d_max only if a D-max driver is enabled (pid.c)
+        boost = 1.0 if (tune.i("d_max_gain") > 0 or tune.i("d_max_advance") > 0) else 0.0
+        op = OperatingPoint(throttle=ai.op.throttle, motor_hz=ai.op.motor_hz, vbat=ai.op.vbat, d_boost=boost,
                             dyn_notch_hz=ai.op.dyn_notch_hz)
         pl = self._plant_for(axis, tune)
         rx = rx_rate_hz(self.src)

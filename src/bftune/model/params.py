@@ -75,6 +75,12 @@ class Tune:
             v = cfg.get(k)
             if v is not None:
                 vals[k] = v
+        # every other known setting from the dump/header: lets the agent change any of them with a
+        # correct revert value (keys absent here are unknown and are not guessed)
+        db = _load_settings_db()
+        for k, v in getattr(cfg, "values", {}).items():
+            if k not in vals and k in db:
+                vals[k] = str(v)
         return cls(vals)
 
     def copy(self) -> Tune:

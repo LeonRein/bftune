@@ -36,9 +36,12 @@ noise-limited best gains*: one candidate file per layout, then `bftune suggest -
 (verdict and objective per file). A layout that looks worse at equal D can win at its own best D.
 
 ## Layout guidance
-1. **RPM filter first.** Harmonics that are visible in gyroUnfilt at weight 100; Q 500-800 (higher Q
-   means less lag, but needs clean telemetry). `rpm_filter_min_hz` below the idle motor frequency
-   (7-10": 50-60).
+1. **RPM filter first.** Always test it:
+   - `sweep … rpm_filter_q 500:900:100`: higher Q means less lag, but needs clean telemetry;
+   - `sweep … rpm_filter_weights "100,100,100;100,50,100;90,30,90"`: a weak harmonic can be
+     down-weighted for less lag;
+   - `rpm_filter_harmonics` 2 or 3;
+   - `rpm_filter_min_hz` below the idle motor frequency (7-10": 50-60).
 2. **Dynamic notch** for **persistent** non-RPM peaks (a frame resonance). Keep `dyn_notch_min_hz`
    above the crossover region, and check the `dn@min` case.
    - Without persistent peaks, removing it saves 2-3° of phase at crossover but also removes noise

@@ -30,6 +30,13 @@ def changed_keys(old: Tune, new: Tune) -> list[str]:
     return keys
 
 
+def _set_line(values: Tune, old: Tune, k: str) -> str:
+    v = values.values.get(k, old.values.get(k))
+    if v is None or v == "":
+        return f"# {k}: previous value unknown (not in the dump or log header) - restore it from your diff all backup"
+    return f"set {k} = {v}"
+
+
 def cli_block(
     old: Tune,
     new: Tune,
@@ -59,7 +66,7 @@ def cli_block(
         rate = [k for k in keys_ if db.get(k, {}).get("scope") == "rateprofile"]
         lines = list(header)
         for k in master:
-            lines.append(f"set {k} = {values.values.get(k, old.values.get(k, ''))}")
+            lines.append(_set_line(values, old, k))
         if prof:
             if profile is not None:
                 lines.append(f"profile {profile}")
@@ -67,11 +74,11 @@ def cli_block(
                 lines.append("# >>> PID profile settings below. No dump was given, so the profile index is unknown:")
                 lines.append("# >>> type `profile N` (N = the PID profile you fly, 0-3) before pasting the following lines.")
             for k in prof:
-                lines.append(f"set {k} = {values.values.get(k, old.values.get(k, ''))}")
+                lines.append(_set_line(values, old, k))
         if rate:
             lines.append("# rate profile settings (active rate profile)")
             for k in rate:
-                lines.append(f"set {k} = {values.values.get(k, old.values.get(k, ''))}")
+                lines.append(_set_line(values, old, k))
         if save:
             lines.append("save")
         return "\n".join(lines) + "\n"

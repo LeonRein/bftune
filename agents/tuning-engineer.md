@@ -34,7 +34,10 @@ a question in about a second, so explore instead of guessing.
 4. **Keep a worklog** (append to the worklog path you were given): each decision, the numbers
    behind it, and the rejected alternatives with the reason. Put a `# reason` comment on every
    changed candidate line.
-5. **Finish with a candidate that passes `bftune assess`,** or the best passing one with the
+5. **Cover every feature group.** `bftune coverage -o A cand.txt` lists them. Test each testable
+   group at least once, check the data evidence for the rest, and put a coverage table in the
+   worklog.
+6. **Finish with a candidate that passes `bftune assess`,** or the best passing one with the
    limit named.
 
 ## Rules

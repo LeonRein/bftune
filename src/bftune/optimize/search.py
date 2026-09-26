@@ -104,6 +104,12 @@ def idle_motor_hz(src: FlightSummary, tune: Tune) -> float:
     return max(src.idle_hz(20), tune.i("dyn_idle_min_rpm") * 100 / 60.0)
 
 
+def output_limit_ratio(tune: Tune, idn: Identification) -> float:
+    """motor_output_limit scales the motor output range (mixer_init.c), so actuator authority and the
+    noise reaching the motors scale with it, relative to the limit the plant was identified with."""
+    return tune.i("motor_output_limit") / max(getattr(idn, "motor_output_limit", 100), 1)
+
+
 def build_cases(fl: FlightSummary, idn: Identification, tune: Tune, axis: int, goals: Goals) -> list[Case]:
     ai = idn.axes[axis]
     cases: list[Case] = []
@@ -118,7 +124,10 @@ def build_cases(fl: FlightSummary, idn: Identification, tune: Tune, axis: int, g
             mhz = fl.motor_hz_at(thr)
         base = ai.plant.scaled(float(np.mean(mhz)), ai.op.vbat, idn.motor)
         dn = ai.op.dyn_notch_hz
-        for boost in (0.0, 1.0):
+        # D only rises above base D through d_max_gain (gyro) or d_max_advance (setpoint): pid.c
+        dmax_active = tune.i(f"d_max_{AXES[axis]}") > tune.i(f"d_{AXES[axis]}") and (
+            tune.i("d_max_gain") > 0 or tune.i("d_max_advance") > 0)
+        for boost in ((0.0, 1.0) if dmax_active else (0.0,)):
             op = OperatingPoint(throttle=thr, motor_hz=list(mhz), vbat=ai.op.vbat, d_boost=boost, dyn_notch_hz=dn,
                                 label=f"{label}/d{'max' if boost else ''}")
             cases.append(Case(op.label, op, dict(base.params), base.structure, w if boost == 0 else 0.0, False))
@@ -161,7 +170,7 @@ class AxisProblem:
             # thrust_linear changes actuator gain relative to the identification tune
             y = min(max(c.op.throttle, 0.0), 1.0)
             G = G * (thrust_linear_slope(tune.i("thrust_linear"), y)
-                     / thrust_linear_slope(getattr(idn, "thrust_linear", 0), y))
+                     / thrust_linear_slope(getattr(idn, "thrust_linear", 0), y)) * output_limit_ratio(tune, idn)
             kp, ki = tune.kp(axis), tune.ki(axis)
             bP = C.Fg * (C.P / kp if kp > 0 else PTERM_SCALE)  # per unit Kp (includes yaw LPF, TPA if PD)
             bI = C.Fg * (C.I / ki if ki > 0 else ITERM_SCALE * idn.dt / (1 - flt.zinv(fr * idn.time_scale, idn.dt)))
@@ -198,7 +207,8 @@ class AxisProblem:
                 k = min(4, len(samples))
                 Q.append((App / k, Add / k, Apd / k))
             self.noise_Q = np.array(Q)
-            self.noise_scale = np.array([thrust_linear_slope(tune.i("thrust_linear"), b.throttle) for b in nm.bands])
+            self.noise_scale = np.array([thrust_linear_slope(tune.i("thrust_linear"), b.throttle) for b in nm.bands]) \
+                * output_limit_ratio(tune, idn)
 
     def noise(self, kp: float, kd: float) -> np.ndarray:
         """HF noise at the motors per noise band (pidSum units x thrust_linear slope)."""

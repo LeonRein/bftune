@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+- **Full feature coverage.** The agent must now consider every Betaflight setting group that shapes flight behaviour
+  (RPM filter, notches, gyro/D-term filters, PIDs, D-max, feedforward and its shaping, RC smoothing, TPA incl. low-TPA,
+  thrust_linear/output limit, throttle boost/sag compensation, dynamic idle, I-term, anti-gravity, PID-sum limits, rates):
+  test each testable group on the model, check the flight data for the rest, and report what it left unchanged and why.
+- New `bftune coverage -o A [cand.txt]`: every group with logged vs candidate values and what can test it
+  (classification verified by perturbing each setting on a real analysis; wing-only settings excluded).
+- New `diagnose` findings: `throttle_punch_dip` (anti-gravity evidence) and `pidsum_clipping_<axis>`.
+- Model: `motor_output_limit` scales actuator authority and motor noise; D-max cases and the step simulation only use
+  `d_max` when `d_max_gain` or `d_max_advance` can raise D.
+- Tunes now carry every setting from the dump/log header, so any of them can be changed with a correct revert value
+  (unknown old values are never guessed).
+
 ## 0.3.0
 - **bftune is now an agent, not a pipeline.** The plugin is the product: `/bftune:tune` (or just "tune my quad")
   starts a conversational engineer loop: interview → diagnose → hypotheses → experiments on the model → decision →

@@ -209,6 +209,16 @@ def cmd_project(a) -> int:
     return 0
 
 
+def cmd_coverage(a) -> int:
+    from .coverage import coverage, format_coverage
+
+    wb = _wb(a)
+    cand = wb.load(a.file)[0] if a.file else None
+    rows = coverage(wb.logged, cand)
+    print(json.dumps(rows, indent=1) if a.json else format_coverage(rows, cand is not None))
+    return 0
+
+
 def cmd_errspec(a) -> int:
     from .analysis.errspec import error_spectrum
     from .flight import load_flight
@@ -367,6 +377,12 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("path")
     s.add_argument("--name")
     s.set_defaults(fn=cmd_project)
+
+    s = sub.add_parser("coverage", help="every flight-behaviour feature: logged vs candidate, what the model can test")
+    _wb_args(s)
+    s.add_argument("file", nargs="?", help="candidate file (optional)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_coverage)
 
     s = sub.add_parser("errspec", help="free-flight tracking-error spectrum of one or more logs (pilot cross-check)")
     s.add_argument("logs", nargs="+")

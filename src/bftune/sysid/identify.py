@@ -60,6 +60,7 @@ class Identification:
     time_scale: float  # actual/nominal loop period
     notes: list[str] = field(default_factory=list)
     thrust_linear: int = 0  # thrust_linear of the identification tune (plant includes its curve)
+    motor_output_limit: int = 100  # at identification (scales actuator authority)
     source: str = "chirp"  # "chirp" (precise) or "freestyle" (stick inputs only, low confidence)
     # robustness variants used by the optimizer/verdict: gain range and extra delay
     uncertainty: dict = field(default_factory=lambda: {"k_hi": 1.10, "k_lo": 0.88, "dT": 0.0003})
@@ -199,4 +200,4 @@ def identify(
                     "motor model's *trend* with speed is used for scheduling"
                 )
     return Identification(axes=axes, motor=motor, runs=runs, dt=dt, time_scale=time_scale, notes=notes,
-                          thrust_linear=tune.i("thrust_linear"))
+                          thrust_linear=tune.i("thrust_linear"), motor_output_limit=tune.i("motor_output_limit"))

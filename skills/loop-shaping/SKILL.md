@@ -85,7 +85,22 @@ what the pilot feels. Say so.
 Compare values with `sweep … rc_smoothing_auto_factor 25,35,50 --steps`. Lower means less lag but
 more RC jitter, which the model can't see.
 
-## Judgement settings (not modelled; change only with a reason)
+## Judgement settings (not modelled; change only with evidence)
+Check each against the flight data before leaving it alone:
+- **Anti-gravity** (`anti_gravity_gain`, `_cutoff_hz`, `_p_gain`): `diagnose` → `throttle_punch_dip`
+  (attitude error while throttle rises fast). Raise the gain in steps of about 20-40 when it is
+  flagged. More I also helps.
+- **I-term** (`iterm_relax_cutoff`, `iterm_windup`, `iterm_rotation`): a `bounce_back` finding
+  calls for a lower relax cutoff. `iterm_rotation` suits pilots who hold long turns or funnels.
+- **Throttle feel** (`throttle_boost`, `_cutoff`, `vbat_sag_compensation`): pilot report only.
+  Sag compensation (about 70-100) keeps the feel constant through the pack.
+- **Feedforward on the RC link** (`feedforward_jitter_factor`, `_max_rate_limit`, `_transition`):
+  - raise jitter_factor on low-rate or noisy links;
+  - transition 20-40 for a softer centre stick (cinematic).
+- **PID-sum limits:** `diagnose` → `pidsum_clipping_*`.
+- **Idle controller** (`dyn_idle_p/i/d_gain`, `dyn_idle_max_increase`, `motor_idle`): defaults
+  unless the log shows the idle rpm dropping below the floor in dives.
+
 - `iterm_relax_cutoff`: 15 freestyle, 20 race, 10 cinematic. Lower it against bounce-back.
 - `anti_gravity_gain`, FF jitter/smoothing/averaging: defaults unless the log shows a problem.
 - Always turn `simplified_pids_mode`, `simplified_dterm_filter` and `simplified_gyro_filter` OFF

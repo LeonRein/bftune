@@ -134,7 +134,7 @@ def identify_freestyle(fl: Flight, tune: Tune, prior_T: float = PRIOR_T) -> Iden
         axes[axis] = AxisIdent(axis, frf, op, fit, {structure: fit}, band, chain, frf.H["y"], frf.H["yf"] / C.Fg,
                                band[1])
     idn = Identification(axes=axes, motor=motor, runs=[], dt=dt, time_scale=time_scale, notes=notes,
-                         thrust_linear=tune.i("thrust_linear"))
+                         thrust_linear=tune.i("thrust_linear"), motor_output_limit=tune.i("motor_output_limit"))
     idn.source = "freestyle"
     idn.uncertainty = {"k_hi": 1.4, "k_lo": 0.7, "dT": 0.0008}  # synthetic twins: K within about ±40 %
     return idn
