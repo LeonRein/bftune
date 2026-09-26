@@ -26,11 +26,14 @@ QUAD_MD = """# {name}
 
 ## Pilot
 - Style (freestyle / race / cinematic / long range):
-- Priorities (e.g. locked-in, propwash, smoothness, motor temperature):
-- Blackbox limits (max log rate without gaps, high resolution OK?):
+- Priorities for the tune, ranked (stick response, locked-in, propwash, smoothness, punch-outs, efficiency):
+- Blackbox device and limits (SD / flash size; max log rate without gaps; high resolution OK?):
+
+## Design targets
+<!-- The limits the agent chose for this quad and why (see bftune:loop-shaping "Design targets"). -->
 
 ## Constraints
-- Motor temperature after flights with each tune (cool / warm / hot):
+- Motor temperature after flights with each tune (cold / cool / slightly warm / warm / hot):
 - Anything that must not change:
 """
 
@@ -67,4 +70,9 @@ def next_tune_dir(path: Path) -> Path:
     tunes = Path(path) / "tunes"
     tunes.mkdir(parents=True, exist_ok=True)
     nums = [int(p.name[:2]) for p in tunes.iterdir() if p.is_dir() and p.name[:2].isdigit()]
+    hist = Path(path) / "history.md"  # iterations recorded there count too (folders may have been moved or deleted)
+    if hist.exists():
+        import re
+
+        nums += [int(m) for m in re.findall(r"^##\s+(\d+)\b", hist.read_text(), flags=re.M)]
     return tunes / f"{(max(nums) + 1) if nums else 1:02d}-{_dt.date.today().isoformat()}"

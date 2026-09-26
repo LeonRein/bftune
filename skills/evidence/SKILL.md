@@ -11,8 +11,22 @@ There are three sources. Each is wrong in its own way:
 | source | strong at | weak at |
 |---|---|---|
 | **model** (`assess`, `sweep`, `ff`, `noise`) | linear margins, what a knob will do, comparing candidates on equal terms | nonlinear effects (saturation, airmode, I-term, anti-gravity), anything outside the identified band or throttle range |
-| **flight data** (`diagnose`, `errspec`) | what actually happened, resonances, hardware problems | confounded by how the pilot flew, so compare like with like |
+| **flight data** (`diagnose`, `errspec`, `logs`, `plot`) | what actually happened, resonances, hardware problems, the stick lag as flown (measured step response) | confounded by how the pilot flew, so compare like with like |
 | **pilot** | what matters, heat, overall feel | small differences, attributing causes |
+
+**Cross-check the model with the measured step response.** `analyze` measures the step response of
+the flown tune from the log (logged setpoint → gyro; Betaflight logs the setpoint after RC
+smoothing, so feedforward shows up as lead) and runs the model through the *same* windows and
+estimator (`analysis.html`, `brief` → `measured_step_as_flown` / `model_step_flown_tune`; the plot
+overlays both). Estimator bias cancels, so:
+- **timing** (50 % time) should agree within the measurement's spread (a few tenths of a ms to
+  ~1 ms with `good` confidence). A clear gap means the model misses delay, motor lag or RC/FF
+  behaviour: find out before trusting predicted lag changes;
+- **peak and dip** are where the model is weakest (FF jitter reduction and rate limits, I-term relax
+  and other nonlinearities are simplified). If the model's peak is higher than measured (seen on a
+  5": 37-42 % vs 20-25 %), treat model FF overshoot as conservative on this quad and calibrate the
+  FF overshoot targets on the *measured* peaks the pilot liked; if lower, the opposite;
+- after a new tune flies, compare measured vs predicted again: that is the model's report card.
 
 ## Is the model trustworthy? (read `brief.json` → `identification`, `warnings`)
 1. `source`:

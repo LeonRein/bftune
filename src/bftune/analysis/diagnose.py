@@ -142,7 +142,11 @@ def desync(fl: Flight) -> list[Finding]:
     if mixer or crash:
         out.append(Finding("rpm_dips_explained", "info",
                            f"{mixer} rpm dip(s) where the mixer commanded the motor down (hard flips/rolls: normal)"
-                           + (f", {crash} during a crash" if crash else ""), {"mixer": mixer, "crash": crash}))
+                           + (f", {crash} during a crash" if crash else ""),
+                           {"mixer": mixer, "crash": crash,
+                            "crash_at_s": sorted({e["t"] for e in ev if e["kind"] == "crash"})},
+                           [], ["a crash dominates error spectra and propwash statistics: `--exclude T0:T1` around it"]
+                           if crash else []))
     return out
 
 
@@ -250,7 +254,7 @@ def propwash(fl: Flight) -> list[Finding]:
     for a, b in _segments(ok, int(0.5 * fl.fs)):
         eb[a:b] = sosfiltfilt(sos, e[a:b], axis=0)
     n = int(0.25 * fl.fs)
-    chop, flip, calm = [], [], []
+    chop, flip, calm, worst = [], [], [], []
     for a, b in _segments(ok, n * 2):
         for s in range(a + n // 2, b - n - n // 2, n // 2):
             rms = float(np.sqrt(np.mean(eb[s : s + n] ** 2)))
@@ -259,14 +263,17 @@ def propwash(fl: Flight) -> list[Finding]:
             if t < 0.25 and np.min(dthr[max(a, s - n) : s + n]) < -1.5:
                 if sp_move < 100:
                     chop.append(rms)
+                    worst.append((rms, float(fl.t[s])))
                 elif sp_move > 200:
                     flip.append(rms)
+                    worst.append((rms, float(fl.t[s])))
             elif 0.25 < t < 0.5 and sp_move < 30:
                 calm.append(rms)
     if len(calm) < 3 or len(chop) + len(flip) < 3:
         return []
     c0 = float(np.median(calm))
-    ev = {"calm_rms_deg_s": round(c0, 2)}
+    ev = {"calm_rms_deg_s": round(c0, 2),
+          "worst_at_s": [round(t, 1) for _, t in sorted(worst, reverse=True)[:3]]}  # for `bftune plot --window`
     parts = []
     for name, v in (("chops", chop), ("flips_rolls", flip)):
         if len(v) >= 3:
@@ -295,19 +302,21 @@ def bounce_back(fl: Flight) -> list[Finding]:
     for axis in range(2):
         sp = fl.setpoint[:, axis]
         fast = ok & (np.abs(sp) > 300)
-        ends = []
+        ends, at = [], []
         for a, b in _segments(fast, int(0.08 * fl.fs)):
             e_end = b + int(0.15 * fl.fs)
             if e_end < fl.n and np.all(np.abs(sp[b : e_end]) < 60):
                 sign = np.sign(np.mean(sp[a:b]))
                 peak_opp = float(np.max(-sign * fl.gyro[b:e_end, axis]))
                 ends.append(peak_opp)
+                at.append((peak_opp, float(fl.t[b])))
         if len(ends) >= 3:
             med = float(np.median(ends))
             if med > 40:
                 out.append(Finding(f"bounce_back_{AXES[axis]}", "warn" if med < 100 else "problem",
                                    f"{AXES[axis]}: median {med:.0f} deg/s opposite rebound after fast moves",
-                                   {"events": len(ends), "median_rebound_deg_s": round(med, 1)},
+                                   {"events": len(ends), "median_rebound_deg_s": round(med, 1),
+                                    "worst_at_s": [round(t, 1) for _, t in sorted(at, reverse=True)[:3]]},
                                    ["I-term windup (iterm_relax too high/cutoff)", "FF overshoot", "low damping (D)"],
                                    ["iterm_relax_cutoff", "feedforward", "D"]))
     return out
@@ -390,7 +399,20 @@ def diagnose(fl: Flight) -> list[dict]:
         except Exception as e:  # a failing heuristic must not hide the others
             findings.append(Finding(f"{fn.__name__}_error", "info", f"{fn.__name__} check failed: {e}"))
     order = {"problem": 0, "warn": 1, "info": 2}
-    return [asdict(f) for f in sorted(findings, key=lambda f: order.get(f.severity, 3))]
+    return [_plain(asdict(f)) for f in sorted(findings, key=lambda f: order.get(f.severity, 3))]
+
+
+def _plain(x):
+    """numpy scalars/arrays -> Python types, so evidence prints as `27.0`, not `np.float64(27.0)`."""
+    if isinstance(x, dict):
+        return {k: _plain(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_plain(v) for v in x]
+    if isinstance(x, np.ndarray):
+        return _plain(x.tolist())
+    if isinstance(x, np.generic):
+        return x.item()
+    return x
 
 
 def format_findings(findings: list[dict], verbose: bool = False) -> str:

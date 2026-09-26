@@ -10,6 +10,7 @@ claude plugin eval . --scaffold --case no-chirp-3inch5
 
 | case | what it checks |
 |---|---|
+| `ask-first` | The first reply asks the questions (fresh `diff all`, ranked priorities for the new tune, motor temperature, changes) before any experiments. |
 | `tune-5inch` | Plain-language request triggers the tune skill. The agent delivers a PASS tune with reasons, a revert block and a project folder, and bases filter decisions on the noise evidence. |
 | `no-chirp-3inch5` | Freestyle-only log: the agent notices there is no chirp, keeps changes small and relative, and asks for a chirp flight. |
 | `long-range-10inch` | 10" at a 4 kHz loop: large-craft judgement (low crossover, TPA for punch-outs, cool motors), not 5" numbers. |

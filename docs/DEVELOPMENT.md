@@ -27,10 +27,12 @@ src/bftune/
   model/     firmware port: filters, controller, plant, parameters
   sysid/     chirp detection/reconstruction, IV FRFs, fits, motor model, validation, freestyle fallback
   noise/     alias-aware noise model and budgets
-  analysis/  diagnose (problem finder), errspec, loop metrics, step simulation
-  optimize/  cases, margins, objective, per-axis search, rules, optional global optimizer
+  analysis/  diagnose (problem finder), errspec, measured step response (logstep), loop metrics, step simulation
+  optimize/  cases, margins, objective, design targets + safety floor (targets.py), per-axis search, rules,
+             optional global optimizer
   emit/      CLI block, revert block, diff table
-  report/    Markdown/HTML report and plots
+  report/    one document model (doc.py -> HTML + Markdown) for every report: analysis.html, logs.html,
+             report.html; plots, spectrograms, time windows
   synth/     synthetic quad twins with known truth
   project/   per-quad project folder helpers
   pipeline.py, workbench.py, cli.py
@@ -65,8 +67,11 @@ bftune inspect  LOG --dump DUMP               # sessions, chirps, gaps, warnings
 bftune diagnose LOG [LOG2 ...] -v             # problem finder (no chirp needed)
 bftune motors   LOG [LOG2 ...]                # motor health: stall / mixer / crash events, rpm per command
 bftune errspec  LOG [LOG2 ...] [--by-throttle 0.35]  # tracking-error spectra + flying intensity
+bftune logs     LOG [LOG2 ...] -o DIR [--window 12:15]  # log report / comparison: logs.html, spectrograms, measured step
+bftune plot     LOG --window 12:15 -o fig.png  # one time window (or --spectrogram) to look at
 bftune analyze  LOG --dump DUMP -o A [--safe-log X] [--safe-cli Y]   # once per log, 10-60 s
 bftune brief    -o A                          # JSON situation report
+bftune targets  -o A [--set 'key=value # reason'] [--unset key] [--reset]  # design targets, sources, safety floor
 bftune candidate -o A cand.txt                # editable tune file (the logged tune)
 bftune assess   -o A cand.txt [more.txt] --with-current --with-safe  # verdict + margins + step + noise (~1 s)
 bftune candidate -o A v2.txt --base cand.txt --set 'key=value # reason'   # variants without shell edits
@@ -96,20 +101,25 @@ bftune synth 5inch -o twin.pkl --truth        # synthetic flight with known trut
    - a replay of the freestyle sections.
 4. **Noise model:** reconstructs the 8 kHz gyro-noise spectrum that explains gyroUnfilt, gyroADC and
    the D term at once from an aliased 1-2 kHz log. It predicts the motor noise for any filter/D
-   combination. The budget is relative to tunes that flew with cool motors.
+   combination. The budget is relative to tunes that flew on this quad, scaled by how warm their motors got.
 5. **Workbench:**
    - margins (PM, GM, Ms, delay margin) at idle, hover, mid and full throttle, including gain/delay
      variants, D-max and the dynamic notch at its minimum;
    - an objective of disturbance rejection plus tracking;
    - step simulation with FF, RC smoothing, TPA and D-max;
-   - the PASS/FAIL gate.
+   - the PASS/FAIL gate: a fixed safety floor plus design targets. Targets come from the data where
+     possible (performance/tracking bands from the flown tune's hover crossover), from labelled
+     conventions otherwise, and from the agent's overrides with reasons (`bftune targets`).
 6. **Diagnose:** heuristics on the flight data, independent of the model. Resonances in the
    tracking-error spectrum per throttle band (low-throttle ones checked against the idle motor
    frequency with order tracking), propwash stratified by manoeuvre, bounce-back, part-throttle
    saturation, imbalance with direction, motor stalls classified against the commanded output
    (stall / mixer / crash), throttle-punch dips, PID-sum clipping and HF motor noise.
-7. **Emit:** a range-checked CLI block (with the simplified-slider guard), a revert block, and a
-   report with plots.
+7. **Look:** `logs`/`plot` render what the agent should see (spectrograms with motor harmonics,
+   time windows, the step response measured by Wiener deconvolution of setpoint → gyro, normalised,
+   with a confidence from the spread over windows). The measured stick lag cross-checks the model's.
+8. **Emit:** a range-checked CLI block (with the simplified-slider guard), a revert block, and
+   `report.html` in the common report style.
 
 ## Learning from real sessions
 The best source of improvements is a real tuning session. Read the transcript (claude.ai/code sessions

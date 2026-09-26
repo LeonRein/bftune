@@ -7,6 +7,8 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob, Grep
 
 # Review a proposed tune
 
+0. If anything essential is missing, ask first, in one message: a log of this quad, a fresh
+   `diff all`, and what the pilot wants from the tune (priorities) and how warm the motors run.
 1. You need an analysis of a log of **this** quad. Use the one in the project folder, or run
    `bftune analyze` (see `bftune:toolbox`). Without any log, you can only check ranges and firmware
    pitfalls: say so.

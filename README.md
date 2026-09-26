@@ -71,9 +71,20 @@ the logs are in ./logs". Other entry points:
 A 1 kHz blackbox rate is enough. Faster is better, but only without gaps in the log.
 
 ### What the agent asks you
-How you fly (freestyle, race, cinematic), what you dislike about the current tune, how warm the
-motors got, and anything that changed since the log (props, battery, weight). It asks only what
-the logs can't tell it.
+Right away, in its first reply: a fresh `diff all`, what the new tune should **prioritise** (ranked:
+stick response, locked-in feel, propwash, smoothness, clean punch-outs, efficiency), how you fly,
+how warm the motors got (cold / cool / slightly warm / warm / hot) and anything that changed since
+the log (props, battery, weight). It asks only what the logs can't tell it, and before any long
+analysis.
+
+### How it decides what "good" is
+There are two tiers. A fixed **safety floor** (phase margin, gain margin, peak sensitivity, delay
+margin, a noise ceiling) protects every delivered tune. Above it, the **design targets** are chosen
+for your quad and your priorities from the evidence: frequency bands scale with the crossover your
+flown tune achieved (a 10" and a whoop differ by an order of magnitude), margins are calibrated on
+how your flown tunes measured and how you rated them, and the noise budget follows your motor
+temperatures. Every target in the report says where it came from (data, a labelled convention,
+or the agent's override with its reason).
 
 ### What you get
 - A **CLI block** to paste into the Configurator's CLI tab. It turns off the simplified-tuning
@@ -81,7 +92,10 @@ the logs can't tell it.
 - A **table of every change** with the reason, and what should feel different.
 - A **revert block** to go back to your current tune.
 - A **first-flight checklist** and what to log next.
-- A **report** (HTML/Markdown) with the predicted margins, latency and noise.
+- A **report** (`report.html`, with graphs): verdict, changes, copyable CLI, predicted margins,
+  stick lag and motor noise, the design targets and the model of your quad. The analysis
+  (`analysis.html`) and log comparisons (`logs.html`: spectrograms, the stick response measured
+  from your flights) use the same style.
 
 ### Your quad's project folder
 bftune keeps a folder per quad as its memory across flights:
@@ -99,7 +113,8 @@ left off.
 ## Safety
 - Every delivered tune passes a deterministic gate. It needs phase margin, gain margin and peak
   sensitivity at idle, hover, mid and full throttle, including worse-than-measured variants (more
-  gain, more delay, D-max). Motor noise must stay below a tune that has already flown cool on your quad.
+  gain, more delay, D-max). Motor noise must stay within a budget set from a tune that has already
+  flown on your quad and how warm its motors got.
 - Without a chirp, the gate becomes relative: no worse than the tune you flew.
 - It stops and tells you when the problem is hardware (desyncs, a bent prop, a weak motor,
   saturation at hover) rather than tuning.

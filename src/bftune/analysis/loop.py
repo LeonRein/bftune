@@ -147,12 +147,28 @@ def rc_path_fr(tune: Tune, f: np.ndarray, rx_hz: float, dt: float, axis: int = 0
     return H_sp, H_ff
 
 
+def reference_fr(tune: Tune, axis: int, plant: Plant, op: OperatingPoint, f: np.ndarray, dt: float, loop_hz: float,
+                 rx_hz: float, time_scale: float = 1.0, relax_i: bool = True, with_ff: bool = True):
+    """(stick -> gyro, stick -> logged setpoint) frequency responses with RC smoothing, FF and the loop."""
+    relaxed = relax_i and (tune.s("iterm_relax").startswith("RPY") or (axis < 2 and tune.s("iterm_relax").startswith("RP")))
+    C = controller_fr(tune, axis, op, f, dt, loop_hz, time_scale=time_scale, include_i=not relaxed)
+    G = plant.fr(f)
+    H_sp, H_ff = rc_path_fr(tune, f, rx_hz, dt, axis)
+    ff_path = tune.kf(axis) * H_ff if with_ff else 0.0
+    U_ref = C.Cr * H_sp + ff_path
+    return G * U_ref / (1 + G * C.Cy), H_sp, U_ref / (1 + G * C.Cy)
+
+
 def step_response(
     tune: Tune, axis: int, plant: Plant, op: OperatingPoint, dt: float, loop_hz: float, rx_hz: float,
     amplitude: float = 500.0, ramp_s: float = 0.02, duration: float = 0.5, with_ff: bool = True,
-    time_scale: float = 1.0, relax_i: bool = True,
+    time_scale: float = 1.0, relax_i: bool = True, ref: str = "stick",
 ) -> dict:
     """Response of gyro to a stick move (ramp of `ramp_s` to `amplitude` deg/s), FFT-based.
+
+    ref="setpoint": the input is the *logged* setpoint instead, which Betaflight records after RC smoothing
+    (blackbox.c logs pidGetPreviousSetpoint = getSetpointRate, pid.c), so the answer is gyro/setpoint = T/H_sp with
+    feedforward (from the raw stick) arriving as lead - the same definition as the step measured from a log.
 
     During stick moves iterm_relax suppresses I (pid.c applyItermRelax) and d_max_advance
     raises D towards d_max, so by default the I path is removed and `op.d_boost` should be 1.
@@ -163,18 +179,13 @@ def step_response(
     t = np.arange(n) * dt
     stick = np.clip(t / ramp_s, 0, 1) * amplitude
     stick[t > 2 * duration] = 0.0  # return to zero half way so the periodic FFT sees a pulse
-    relaxed = relax_i and (tune.s("iterm_relax").startswith("RPY") or (axis < 2 and tune.s("iterm_relax").startswith("RP")))
-    C = controller_fr(tune, axis, op, f, dt, loop_hz, time_scale=time_scale, include_i=not relaxed)
-    G = plant.fr(f)
-    H_sp, H_ff = rc_path_fr(tune, f, rx_hz, dt, axis)
-    ff_path = tune.kf(axis) * H_ff if with_ff else 0.0
-    U_ref = C.Cr * H_sp + ff_path
-    Tfull = G * U_ref / (1 + G * C.Cy)
-    Tsp = H_sp
+    Tfull, Tsp, Tu = reference_fr(tune, axis, plant, op, f, dt, loop_hz, rx_hz, time_scale, relax_i, with_ff)
     X = np.fft.rfft(stick)
+    if ref == "setpoint":
+        Tfull, Tu, Tsp = Tfull / Tsp, Tu / Tsp, np.ones_like(Tsp)
     y = np.fft.irfft(Tfull * X, n)
     sp = np.fft.irfft(Tsp * X, n)
-    u = np.fft.irfft(U_ref / (1 + G * C.Cy) * X, n)
+    u = np.fft.irfft(Tu * X, n)
     m = t <= duration
     return {"t": t[m], "stick": stick[m], "setpoint": sp[m], "gyro": y[m], "pidsum": u[m]}
 
@@ -189,6 +200,9 @@ def step_metrics(res: dict) -> dict:
     i50_y = np.argmax(yn >= 0.5)
     i90 = np.argmax(yn >= 0.9)
     overshoot = max(0.0, (yn.max() - 1) * 100)
+    k = int(np.argmax(yn))
+    after = yn[k : int(np.searchsorted(t, t[k] + 0.1)) + 1]
+    undershoot = max(0.0, (1 - float(after.min())) * 100) if yn[k] > 1 else 0.0  # dip after the peak: end-of-flick bounce
     settle_idx = np.flatnonzero(np.abs(yn - 1) > 0.05)
     settle = t[settle_idx[-1]] if len(settle_idx) else 0.0
     # tracking lag: time shift minimizing error between setpoint and gyro
@@ -203,6 +217,7 @@ def step_metrics(res: dict) -> dict:
         "delay_50_ms": (t[i50_y] - t[i50_sp]) * 1000,
         "rise_90_ms": t[i90] * 1000,
         "overshoot_pct": overshoot,
+        "undershoot_pct": undershoot,
         "settle_5pct_ms": settle * 1000,
         "tracking_lag_ms": lag * 1000,
         "stick_lag_ms": stick_lag * 1000,

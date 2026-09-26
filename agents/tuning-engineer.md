@@ -22,7 +22,9 @@ a question in about a second, so explore instead of guessing.
    analysis? what does the pilot want?), say so in your answer instead of inventing it.
 2. **Orient yourself:**
    - read `A/brief.json`, or run `bftune brief -o A`;
-   - note the model source and confidence, what limits the current tune, and the findings.
+   - note the model source and confidence, what limits the current tune, and the findings;
+   - look at the figures (Read the PNGs): `A/spectrogram.png`, `A/log_steps.png`, `A/plant_bode.png`;
+     `bftune plot LOG --window T0:T1` for a moment a finding points to (`worst_at_s`).
 3. **Work hypothesis by hypothesis.** For each one:
    - state the mechanism;
    - run the smallest experiment that could refute it (`sweep`, `assess` of variants, `suggest` on

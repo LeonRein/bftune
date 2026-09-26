@@ -89,4 +89,8 @@ def format_motors(name: str, events: list[dict], health: dict) -> str:
         if e["kind"] in ("stall", "unclear"):
             out.append(f"    {e['kind'].upper():7s} motor {e['motor']} t={e['t']} s for {e['ms']} ms: commanded {e['command']} "
                        f"(others {e['others_command']}), rpm {e['rpm_hz']} Hz vs others {e['others_hz']} Hz, throttle {e['throttle']}")
+    crash = sorted({e["t"] for e in events if e["kind"] == "crash"})
+    if crash:
+        out.append(f"    crash at t={', '.join(str(t) for t in crash)} s: pass `--exclude T0:T1` around it to diagnose/errspec/logs/"
+                   "analyze so the crash does not dominate the statistics")
     return "\n".join(out)

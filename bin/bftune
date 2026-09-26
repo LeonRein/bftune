@@ -8,14 +8,19 @@ for d in "$HOME/.local/bin" "$HOME/.cargo/bin" "/opt/homebrew/bin" "/usr/local/b
     case ":$PATH:" in *":$d:"*) ;; *) [ -x "$d/uv" ] && PATH="$PATH:$d" ;; esac
 done
 export PATH
-if command -v uv >/dev/null 2>&1; then
-    exec uv run --quiet --frozen --project "$here" bftune "$@"
+if command -v uv >/dev/null 2>&1 && [ -f "$here/pyproject.toml" ] && [ -f "$here/src/bftune/__main__.py" ]; then
+    # `python -m bftune`, not `bftune`: the latter could resolve to this launcher on PATH and recurse
+    exec uv run --quiet --frozen --project "$here" python -m bftune "$@"
 fi
 for py in python3 python; do
-    if command -v "$py" >/dev/null 2>&1 && "$py" -c "import bftune" 2>/dev/null; then
+    if command -v "$py" >/dev/null 2>&1 && "$py" -c "import bftune.cli" 2>/dev/null; then
         exec "$py" -m bftune "$@"
     fi
 done
+if [ ! -f "$here/src/bftune/__main__.py" ]; then
+    echo "bftune: the plugin folder $here has no Python package (src/bftune): reinstall or update the plugin." >&2
+    exit 127
+fi
 cat >&2 <<EOF
 bftune: needs 'uv' (https://docs.astral.sh/uv/). Install it for the current user, without sudo:
     curl -LsSf https://astral.sh/uv/install.sh | sh

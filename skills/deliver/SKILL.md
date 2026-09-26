@@ -10,7 +10,9 @@ user-invocable: false
    ```
    bftune emit -o <analysis dir> <dir>/tunes/NN-date/cand.txt --to <dir>/tunes/NN-date
    ```
-   This writes `tune_cli.txt`, `revert_cli.txt`, `report.md`, `report.html`, `tune.json` and the plots.
+   This writes `tune_cli.txt`, `revert_cli.txt`, `report.html` (the deliverable: verdict, changes,
+   copyable CLI, predicted behaviour with plots, design targets, model), `report.md` (the same as
+   text, for you), `tune.json` and the plots.
    - Exit code 2 = **FAIL**: do not deliver it.
    - `emit` lists changes without a `# reason`. Add the reasons, because they become the report's
      "why" column.
@@ -52,4 +54,6 @@ user-invocable: false
    - Update `quad.md` if you learned a lasting fact (hardware, preference, a calibration lesson).
    - The worklog stays in the tune folder.
 
-Never paste the full report into the chat. Link the files and summarize.
+Never paste the full report into the chat. Link `report.html` (and `analysis.html`) and summarize.
+All bftune reports share one style: `analysis.html` (analyze), `logs.html` (logs), `report.html`
+(emit).

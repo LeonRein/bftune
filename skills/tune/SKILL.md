@@ -38,43 +38,71 @@ Load the knowledge skills when you need them. They are not preloaded:
      the current directory). Copy the logs and dump into `<dir>/logs/` as `NN-<original name>`
      (`01-LOG00007.BFL`, `01-dump.txt`), where NN is the iteration the log belongs to (`00-` for
      logs of tunes from before the first bftune iteration).
-2. **Look at what you have (seconds, before anything heavy):**
-   - `bftune tunes LOG1 LOG2 ... [--dump DUMP]` groups the logs by the tune they flew (headers
-     only, instant). It shows how the tunes differ and whether the dump matches one of them. If
-     it matches none, the quad now runs a tune that no log contains.
-   - `bftune inspect LOG [--dump DUMP]` shows sessions, chirp runs, debug mode, log rate, gaps and
-     warnings. If there are several sessions, pick the one with chirps or the longest flight, and
-     say which one you used.
-3. **Ask before the heavy work.** Put the questions in one message and wait for the answers. You
-   *must* ask when any of these holds:
-   - the logs contain more than one tune and it is unclear which one is on the quad now;
-   - there is no dump, or the dump matches no log. Ask for a fresh `diff all`: it gives the
-     profile index, the slider state and the tune actually on the quad.
-   - you need a tune as a noise reference but don't know how warm its motors got;
-   - the pilot's style and priorities are unknown.
+2. **Ask right away. Your first reply is the questions.** Before asking, do only what takes seconds:
+   list the files and run `bftune tunes LOG1 LOG2 ... [--dump DUMP]`. That groups the logs by the
+   tune they flew, shows how the tunes differ, and whether a dump matches one of them. Then ask
+   everything below in **one** message, and skip what the files or `quad.md` already answer:
+   - **A fresh `diff all`** from the Configurator CLI, if none was given or it matches no log. It
+     gives the tune actually on the quad, the active profile and the slider state.
+   - **What the new tune should prioritise**, ranked (top 2-3). Offer the options:
+     - stick response / low latency;
+     - locked-in feel (holds its line in wind and fast flight);
+     - propwash handling (dives, flips, chops);
+     - smoothness (cinematic, no jitter);
+     - clean punch-outs;
+     - efficiency and cool motors (flight time).
 
-   If the user asks "do you need anything else?", answer that first; it is an invitation to ask.
-   Also ask, in the same message, what they dislike about each tune, and about props, weight and
-   anything changed since the logs.
+     Ask what they want *more of*, not what they dislike. A bothering symptom is welcome as extra
+     information, but the priorities steer the tune.
+   - **Style and craft:** freestyle, race, cinematic or long range; frame size, props, cells,
+     rough weight.
+   - **Motor temperature** right after the logged flight(s), for each tune: cold, cool, slightly
+     warm, warm (can't hold a finger on it for 5 s) or hot.
+   - **Changes since the logs** (props, battery, crash, repairs) and known hardware issues.
+   - **Only if the logs contain several tunes:** which one is on the quad now, and how each felt.
+   - Anything that must not change (rates, a particular feel).
 
-   Record the answers in `quad.md` (facts) and `history.md` (impressions, quoted). Fill in the
-   template's own fields (Hardware, Pilot, Constraints) rather than appending a separate list, and
-   keep them current.
+   Don't make the pilot wait for heavy work before these questions. If a chirp log is obvious you
+   may start `bftune analyze` in the background (`run_in_background`) and ask in the same reply;
+   re-run it with the dump if one arrives. `inspect`, `diagnose` and the rest come after the answers.
+
+   If the user asks "do you need anything else?", that is exactly this message.
+
+3. **Record the answers** in `quad.md` (facts; the ranked priorities under Pilot) and `history.md`
+   (impressions, quoted). Fill in the template's own fields rather than appending a separate list,
+   and keep them current. Then look at the logs in depth: `bftune inspect LOG [--dump DUMP]` shows
+   sessions, chirp runs, debug mode, log rate, gaps and warnings. If there are several sessions,
+   pick the one with chirps or the longest flight, and say which one you used.
 
    Proceed on assumptions only if the pilot said they can't answer. Use these defaults and list
    them in your answer and in `history.md`:
-   - style: freestyle;
-   - motors "cool", "fine" or unknown: the logged tune is the noise reference (the default budget
-     never forces a cut below it); "warm": pass `--noise-budget 0.85` to the workbench commands,
-     which forces about 15 % less motor noise; "hot": 0.7-0.8, and fix the heat first;
+   - style: freestyle; priorities: stick response, then propwash;
+   - motors unknown: noise_budget 1.0 (hold the flown level; see `bftune:filters-noise`);
    - the most recent log's tune is what is on the quad, and props and weight are unchanged.
-4. **Choose the role of each log:**
+4. **Derive the design targets** for this quad and pilot once the analysis exists
+   (`bftune:loop-shaping` → "Design targets"):
+   - calibrate them on the flown tunes' measured margins and how the pilot rated those tunes;
+   - apply the ranked priorities;
+   - set the noise budget from the motor temperature.
+
+   Set them with `bftune targets -o A --set 'key=value # evidence'`, and copy them into `quad.md` →
+   "Design targets" (add that section if an older `quad.md` lacks it). The defaults are conventions,
+   not measurements. `targets` prints the flown tune's verdict under the new targets; outputs from
+   before (`brief`, `assess`) used the old ones, so re-run what you rely on.
+5. **Choose the role of each log:**
    - The model comes from a log **with chirps**. With several, prefer the cleanest: no gaps or
      corrupt frames, and the best validation. Cross-check the others against it; a disagreement
      is a finding to explain.
    - A log whose tune flew with cool or slightly warm motors is a noise reference (`--safe-log`).
      Its header holds its full tune, so it needs no dump.
    - Logs without chirps are evidence: `diagnose` and `errspec`.
+   - **"The quad still runs the tune from log X"** and no fresh dump: pass that log as `--dump`
+     (`analyze LOG --dump LOG_X`); its header is the tune on the quad. The PID profile index is then
+     unknown: take it from the project's older dumps and confirm it with the pilot
+     (`emit --profile N`).
+   - **A crash or bench test inside a log** (`motors` prints crash times, `diagnose` →
+     `rpm_dips_explained.crash_at_s`): pass `--exclude T0:T1` to `analyze`, `diagnose`, `errspec`,
+     `logs` and `motors`, or it dominates the error spectra and the propwash statistics.
    - **A dump belongs to the tune on the quad now, not necessarily to the log.** Pass it to
      `analyze` anyway. If it differs from the log's tune, the model uses the log's own settings
      (what flew), and the dump becomes "the tune on the quad now": candidates start from it,
@@ -88,9 +116,23 @@ Load the knowledge skills when you need them. They are not preloaded:
 - `bftune diagnose LOG [OTHER_LOGS...] -v` works on any log, with or without chirps. It finds
   resonances in the tracking error, propwash, bounce-back, saturation, motor imbalance, desyncs
   and heat risk.
+- **Look at the flights yourself.** You can read images, so use them to see what numbers hide:
+  - `bftune logs LOG [OTHER_LOGS...] -o <dir>/analysis/logs` writes `logs.html` and PNGs: noise vs
+    throttle spectrograms (raw gyro, filtered gyro, D-term, with the motor harmonics drawn in), the
+    step response **measured** from the flight (stick lag as flown), the tracking-error spectrum
+    and, for several logs, the settings that differ. Open the spectrogram and step PNGs with Read.
+  - `bftune plot LOG --window T0:T1 -o fig.png` shows sticks, gyro, D-term, motors and rpm in a
+    time window. Findings give `worst_at_s` times (propwash, bounce-back): look at those moments
+    before you believe a heuristic.
+  - What to look for: motor lines that leak through the filtered gyro (RPM filter), fixed-frequency
+    stripes (frame resonance: dynamic notch, lowpass), D-term energy at high throttle (heat), a
+    measured stick lag that disagrees with the model's prediction for the flown tune (a model or
+    identification problem: `bftune:evidence`).
 - `bftune analyze LOG [--dump DUMP] -o <dir>/analysis/NN [--safe-log X] [--safe-cli Y]` is run once
-  per log (10-60 s). It identifies the plant and builds the noise model. Pass every other tune of
-  this quad that flew with **cool motors** as `--safe-log`/`--safe-cli`. They set the noise budget.
+  per log (10-60 s). It identifies the plant and builds the noise model, and writes
+  `analysis.html` (model, fit, noise, spectrogram, measured step response, findings: the pilot can
+  open it too). Pass every other tune of this quad that flew with **cool motors** as
+  `--safe-log`/`--safe-cli`. They set the noise budget.
 - `bftune brief -o <dir>/analysis/NN` prints one JSON with everything: model and confidence,
   flight facts, the current tune's margins, proven-safe tunes, noise, findings and warnings. Read it
   fully.
@@ -169,8 +211,8 @@ Choose using `bftune:loop-shaping` and `bftune:filters-noise`, weighted by what 
 Hard rules:
 - `bftune emit` must say **PASS**. Exit code 2 means FAIL: never deliver it. If the design margins
   can't be met, deliver the best passing tune and say what limits it.
-- The noise budget (≤ 0.9× the proven-safe level) is only raised with evidence: a flown tune with
-  cool motors.
+- The noise budget is set from the pilot's motor temperature (`bftune:filters-noise`), not assumed.
+  Beyond 1.25× the proven-safe level only after a supervised noise-headroom flight.
 - With a **no-chirp model** (`identification.source = freestyle`) the gate is relative: no worse
   than the flown tune. Keep changes small and targeted at diagnosed problems (about ±15 % on P/D,
   filters one step at a time), and always ask for a chirp flight for the next round.
@@ -228,7 +270,9 @@ findings never block a *conservative* tune, but they do block an aggressive one.
 - A gate in `analyze` fails (filter-chain check, closed-loop error, implausible plant for the craft class).
 - A `diagnose` problem that tuning cannot fix:
   - a real motor stall (`motor_stall` in `diagnose`; review with `bftune motors`). The `mixer`
-    dips in hard flips are normal;
+    dips in hard flips are normal. Judge the context: a stall right after a crash in the same log,
+    with the prop replaced since and the motor spinning freely, is explained; one at steady
+    throttle on undamaged hardware is not. Say which it is and why;
   - motor imbalance above about 30 % (bent prop, bad motor). Below that it is usually CG or trim:
     tell the pilot the direction `diagnose` reports and continue;
   - saturation at part throttle (overweight or weak motors);
@@ -236,3 +280,7 @@ findings never block a *conservative* tune, but they do block an aggressive one.
 - The firmware is not 2026.6.x (`inspect` warns; `analyze` refuses older releases). See
   `bftune:craft-classes`.
 - The pilot's report contradicts the model and you cannot explain why.
+
+Known, unresolved hardware issues (a bent arm, a suspect motor) are the pilot's to fix. Decide with
+the evidence what they block: they always block a noise-headroom flight, and they should lower the
+noise budget only if they make noise or heat (compare the motors' logged noise and temperature).

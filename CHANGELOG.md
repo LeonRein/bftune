@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.7.0
+Make the agent's judgement, not hidden constants, decide what a good tune is for this quad and pilot, and let it
+see the flights.
+- **Ask first.** `/bftune:tune`, `feedback` and `review` ask in their first reply, before any long analysis: a fresh
+  `diff all`, what the new tune should **prioritise** (ranked: stick response, locked-in, propwash, smoothness, clean
+  punch-outs, efficiency) instead of "what did you dislike", style, motor temperature on a 5-step scale, changes.
+  New eval `ask-first`.
+- **Safety floor vs design targets.** A fixed floor (PM 30 deg, GM 4 dB, Ms 2.6; robust variants 25 / 3 / 3.2; delay
+  margin 0.5 ms; noise at most 2x a flown level) that no override can relax. Above it, design targets the agent
+  derives from the evidence: frequency bands scale with the flown tune's hover crossover (no size classes), margins
+  are calibrated on how the flown tunes measured and how the pilot rated them, priorities weigh them. Remaining
+  defaults are labelled `convention` (style presets `<style> convention`). New `bftune targets -o A --set
+  'key=value # reason'` stores overrides in `A/targets.json`; every output (assess, brief, emit report) lists each
+  target's value and source; violations below the floor are marked as such.
+- **Noise budget from motor temperature** (cold 1.25x, cool 1.1x, slightly warm 1.0x, warm 0.85x, hot 0.7x of the
+  flown level; a heuristic, labelled so) replaces the silent 0.9. The noise limit in violations says what it is and
+  why. `filters-noise` explains why a budget exists at all (HF ripple losses, saturation, resonance, desync) and that
+  hot motors on a healthy build point at something else.
+- **One report style.** A shared document model renders every report as self-contained HTML (light/dark, cards,
+  tables, copyable CLI, embedded figures) plus the same content as Markdown for the agent: `report.html` (emit, the
+  deliverable), `analysis.html` (analyze: model, fit, noise, spectrogram, measured response, findings), `logs.html`.
+- **Look at the flights.** New `bftune logs LOG...` (one log = report, several = comparison with the settings that
+  differ): noise-vs-throttle spectrograms of raw gyro, filtered gyro and D-term with the (aliased) motor harmonics,
+  the step response measured from ordinary flying, tracking-error spectra, how hard each flight was flown. New
+  `bftune plot LOG --window T0:T1` (sticks, gyro, D-term, motors, rpm) and `--spectrogram`. Propwash and bounce-back
+  findings give `worst_at_s` times to look at.
+- **Measured stick lag.** The deconvolved step response was biased (settled at ~0.6; a pure 5 ms delay read as 14 ms).
+  It is now normalised per window with weaker regularisation (a known delay is recovered to ~1 ms) and carries a
+  confidence. `analyze`/`brief` compare it with the model's stick lag for the flown tune (5": 7/8/5 ms measured vs
+  7.0/8.8/4.2 ms predicted).
+- **Model vs measured, like for like.** Betaflight logs the setpoint after RC smoothing (blackbox.c:
+  pidGetPreviousSetpoint), so the model now replays the logged setpoint through FF and the loop, and the same
+  windows and estimator turn it into a step. `analysis.html` overlays model and measurement; `brief` compares the
+  50 % times (5": 6.8/7.5/4.6 ms measured vs 6.0/7.3/4.0 model) and the peaks (the model's FF peak is higher on
+  that quad: 37-42 % vs 20-25 %, a calibration for FF targets). 50 % times are interpolated between samples;
+  undershoot (the dip after the peak) is reported for measured and model steps.
+- From a cold replay of the whole tune flow on the real 5" data: `--dump` accepts a log ("the quad still runs the
+  tune from log X"); `--exclude T0:T1` on analyze/diagnose/errspec/logs/motors, and crash times printed by
+  `motors` and `diagnose`; `emit --profile N`; `targets --set` prints the flown tune's verdict under the new
+  targets; `suggest` judges feasibility with the delivery gate (D-max and robust cases), lists what fails and
+  shows the stick-lag change; `sweep` no longer calls FF/RC settings "no effect" without `--steps`; violation
+  messages print the real limit (2.45, not 2.5); diagnose evidence without numpy reprs; `project next-tune-dir`
+  counts iterations in history.md; skill guidance for crash-explained stalls, known hardware issues and which
+  knobs set stick lag.
+- The plugin launcher runs `python -m bftune` (a missing package could make `uv run bftune` call the launcher
+  itself 101 times) and says clearly when the plugin folder has no package.
+- `optimize`/`all` use the stored targets; the craft-class plausibility table is
+  relabelled as hints, not limits.
+
 ## 0.6.0
 From reviewing two full real sessions (3.5" and 5", 2026-09-26, 214 tool calls): every custom script the agents had
 to write became an instrument, and the gate no longer blocks quads it was wrong for.

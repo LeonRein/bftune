@@ -4,6 +4,8 @@ These are the tools the bftune agent uses (skills/tune). Users normally don't ca
 
     bftune inspect LOG --dump DUMP
     bftune diagnose LOG [LOG2 ...] [-v]                              # problem finder (no chirp needed)
+    bftune logs    LOG [LOG2 ...] -o DIR [--window 12:15]            # log report / comparison (HTML + figures)
+    bftune plot    LOG --window 12:15 -o fig.png                     # one time window, to look at
     bftune analyze LOG --dump DUMP -o OUT [--safe-log OTHER.BFL]    # slow step, once (~10 s)
     bftune brief   -o OUT                                            # situation report (JSON)
     bftune candidate -o OUT cand.txt                                 # editable tune file
@@ -27,7 +29,7 @@ import numpy as np
 
 from . import __version__
 
-STYLES = ["freestyle", "race", "cinematic"]
+STYLES = ["freestyle", "race", "cinematic", "longrange"]
 
 
 def _log(msg: str) -> None:
@@ -92,7 +94,7 @@ def cmd_analyze(a) -> int:
     from .pipeline import analyze
 
     analyze(a.log, a.dump, Path(a.out), a.index, log=_log, safe_logs=a.safe_log, safe_cli=a.safe_cli,
-            any_firmware=a.any_firmware)
+            any_firmware=a.any_firmware, excluded=_windows(a.exclude))
     return 0
 
 
@@ -221,23 +223,25 @@ def cmd_suggest(a) -> int:
             t.update(**{f"p_{ax}": r["p"], f"i_{ax}": r["i"], f"d_{ax}": r["d"], f"d_max_{ax}": r["d_max"]})
         ass = wb.assess(t, steps=False, axes=axes)
         tot = sum(e["objective_db"] * (0.5 if ax == "yaw" else 1.0) for ax, e in ass["axes"].items())
-        if len(a.files) > 1:
-            print(f"== {Path(f).name}: verdict with suggested gains {ass['verdict']}, total objective {tot:.2f} dB")
+        print(f"== {Path(f).name}: verdict with suggested gains {ass['verdict']}, total objective {tot:.2f} dB")
         for ax, r in res.items():
-            print(f"{ax:5s}: P {r['p']} I {r['i']} D {r['d']} d_max {r['d_max']}  feasible={r['feasible']} "
+            lag = f"  stick lag {r['stick_lag_ms'][0]:.1f} -> {r['stick_lag_ms'][1]:.1f} ms" if r.get("stick_lag_ms") else ""
+            print(f"{ax:5s}: P {r['p']} I {r['i']} D {r['d']} d_max {r['d_max']}  {'passes' if r['feasible'] else 'FAILS'} "
                   f"noise {r['noise_vs_safe']:.2f}x safe  worst PM {r['worst']['pm']:.0f}° Ms {r['worst']['ms']:.2f}"
-                  f"  obj {ass['axes'][ax]['objective_db']:.2f} dB"
-                  + (f"  [{r['note']}: {r['violated']}]" if "note" in r else "") + (f"  [{r['range']}]" if "range" in r else ""))
-    print("(proposals with all other settings fixed; several files = compare filter/TPA variants at their best gains)")
+                  f"  obj {ass['axes'][ax]['objective_db']:.2f} dB{lag}" + (f"  [{r['range']}]" if "range" in r else ""))
+            for v in r.get("violations", []):
+                print(f"        violated: {v}")
+    print("(proposals with all other settings fixed; they optimise disturbance rejection (obj), not stick lag, and set\n"
+          " I = i_over_p x P (a target, `bftune targets`); several files = compare filter/TPA variants at their best gains)")
     return 0
 
 
 def cmd_diagnose(a) -> int:
     from .analysis.diagnose import diagnose, format_findings
-    from .flight import load_flight
+    from .flight import exclude, load_flight
 
     for path in a.logs:
-        fl = load_flight(path, a.dump, a.index)
+        fl = exclude(load_flight(path, a.dump, a.index), _windows(a.exclude))
         res = diagnose(fl)
         if a.json:
             print(json.dumps({"log": path, "findings": res}, indent=1, default=float))
@@ -289,11 +293,11 @@ def cmd_coverage(a) -> int:
 
 def cmd_motors(a) -> int:
     from .analysis.motors import format_motors, motor_health, rpm_events
-    from .flight import load_flight
+    from .flight import exclude, load_flight
 
     res = {}
     for p in a.logs:
-        fl = load_flight(p)
+        fl = exclude(load_flight(p), _windows(a.exclude))
         ev, h = rpm_events(fl), motor_health(fl)
         res[p] = {"events": ev, "health": h}
         if not a.json:
@@ -311,6 +315,41 @@ def cmd_applied(a) -> int:
     return 0 if not res["not_applied"] and res["profile_ok"] else 1
 
 
+def cmd_targets(a) -> int:
+    from .optimize.targets import TARGET_KEYS, build_goals, format_targets, goals_dict, load_targets, save_targets
+
+    wb = _wb(a)
+    data = load_targets(Path(a.out)) if not a.reset else {"overrides": {}, "reasons": {}}
+    for kv in a.set or []:
+        body, _, why = kv.partition("#")
+        if "=" not in body:
+            raise SystemExit(f"targets: --set expects KEY=VALUE[#reason], got {kv!r}")
+        k, v = (x.strip() for x in body.split("=", 1))
+        if k != "style" and k not in TARGET_KEYS:
+            raise SystemExit(f"unknown target {k!r}; targets: style, {', '.join(TARGET_KEYS)}")
+        data["overrides"][k] = v
+        if why.strip():
+            data["reasons"][k] = why.strip()
+    for k in a.unset or []:
+        data["overrides"].pop(k, None)
+        data["reasons"].pop(k, None)
+    g, src = build_goals(None, wb.flown_hover_fc, data["overrides"], None)  # validates against the safety floor
+    if a.set or a.unset or a.reset:
+        save_targets(Path(a.out), data)
+    print(json.dumps({"targets": goals_dict(g), "sources": src, "reasons": data["reasons"]}, indent=1, default=list)
+          if a.json else format_targets(g, src, data["reasons"]))
+    if (a.set or a.unset or a.reset) and not a.json:
+        # what the new targets mean for the tune that flew (brief/assess from before are now stale)
+        from .workbench import Workbench
+
+        ass = Workbench(Path(a.out)).assess(wb.logged, steps=False)
+        viol = [f"{ax}: {v}" for ax, e in ass["axes"].items() for v in e["violations"]]
+        print(f"\nflown tune under these targets: {ass['verdict']}" + ("" if not viol else f" ({len(viol)} violated: "
+              + "; ".join(viol[:4]) + (" ..." if len(viol) > 4 else "") + ")")
+              + ". Re-run `brief`/`assess` for everything else: earlier outputs used the old targets.")
+    return 0
+
+
 def cmd_tunes(a) -> int:
     from .tunes import format_tunes, group_tunes
 
@@ -321,10 +360,10 @@ def cmd_tunes(a) -> int:
 
 def cmd_errspec(a) -> int:
     from .analysis.errspec import error_spectrum
-    from .flight import load_flight
+    from .flight import exclude, load_flight
 
     splits = [None] if a.by_throttle is None else [(0.0, a.by_throttle), (a.by_throttle, 1.01)]
-    fls = {Path(p).name: load_flight(p) for p in a.logs}
+    fls = {Path(p).name: exclude(load_flight(p), _windows(a.exclude)) for p in a.logs}
     res = {}
     for sp in splits:
         tag = "" if sp is None else f" thr {'<' if sp[0] == 0 else '>='}{a.by_throttle:.2f}"
@@ -350,6 +389,44 @@ def cmd_errspec(a) -> int:
     return 0
 
 
+def _windows(specs):
+    out = []
+    for w in specs or []:
+        try:
+            t0, t1 = (float(x) for x in w.split(":"))
+        except ValueError:
+            raise SystemExit(f"--window {w!r}: expected T0:T1 in seconds, e.g. 12.5:15") from None
+        out.append((t0, t1))
+    return out
+
+
+def cmd_logs(a) -> int:
+    from .report.logs import format_summary, log_report
+
+    html, summary = log_report(a.logs, Path(a.out), a.dump, a.index, _windows(a.window), not a.no_spectrogram,
+                               _windows(a.exclude))
+    (Path(a.out) / "logs.json").write_text(json.dumps(summary, indent=1, default=float))
+    print(json.dumps(summary, indent=1, default=float) if a.json else format_summary(summary, html))
+    return 0
+
+
+def cmd_plot(a) -> int:
+    from .flight import load_flight
+    from .report.logs import spectrogram_plot, window_plot
+
+    fl = load_flight(a.log, a.dump, a.index)
+    out = Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if a.spectrogram:
+        print(spectrogram_plot(fl, out, Path(a.log).name))
+        return 0
+    wins = _windows(a.window) or [(0.0, float(fl.t[-1]))]
+    for i, (t0, t1) in enumerate(wins):
+        p = out if len(wins) == 1 else out.with_name(f"{out.stem}_{i}{out.suffix}")
+        print(window_plot(fl, t0, t1, p, f"{Path(a.log).name}  {t0:g}-{t1:g} s"))
+    return 0
+
+
 def cmd_ff(a) -> int:
     from .flight import AXES
     from .workbench import parse_values
@@ -361,11 +438,24 @@ def cmd_ff(a) -> int:
     print(f"feedforward f_{a.axis}: flick = 300°/s in 50 ms, snap = fast move below the max-rate limit")
     print("lag = gyro vs smoothed setpoint; stick = gyro vs raw stick (end-to-end, includes RC smoothing)")
     print(f"{'F':>5s} | {'flick lag':>9s} {'stick':>7s} {'overshoot':>9s} {'settle':>7s} | {'snap lag':>8s} {'stick':>7s} {'overshoot':>9s}")
+    tf, ts = wb.goals.ff_overshoot_flick, wb.goals.ff_overshoot_snap
     for r in rows:
         fl_, sn = r["flick"], r["snap"]
+        over = "  over target" if fl_["overshoot_pct"] > tf or sn["overshoot_pct"] > ts else ""
         print(f"{r['f']:>5} | {fl_['tracking_lag_ms']:8.1f}ms {fl_['stick_lag_ms']:5.1f}ms {fl_['overshoot_pct']:8.0f}% "
-              f"{fl_['settle_5pct_ms']:6.0f}ms | {sn['tracking_lag_ms']:7.1f}ms {sn['stick_lag_ms']:5.1f}ms {sn['overshoot_pct']:8.0f}%")
+              f"{fl_['settle_5pct_ms']:6.0f}ms | {sn['tracking_lag_ms']:7.1f}ms {sn['stick_lag_ms']:5.1f}ms {sn['overshoot_pct']:8.0f}%"
+              + over)
+    print(f"overshoot targets: flick <= {tf:.0f} %, snap <= {ts:.0f} % ({wb.target_sources.get('ff_overshoot_flick')}; "
+          "`bftune targets` to change them for this pilot)")
     return 0
+
+
+def _per_axis(d) -> str:
+    from .flight import AXES
+
+    if isinstance(d, dict):
+        return ", ".join(f"{AXES[k] if isinstance(k, int) else k} {float(v):.3g}" for k, v in d.items())
+    return str(d)
 
 
 def cmd_noise(a) -> int:
@@ -380,7 +470,8 @@ def cmd_noise(a) -> int:
         print(f"throttle {b['throttle']:.2f} (motors {b['motor_hz']:.0f} Hz): D-term rms {b['measured_dterm_rms']} "
               f"gyro rms {b['measured_gyro_rms']} fit error {b['fit_error']}")
         if "safe_level" in b:
-            print(f"    motor-noise proven-safe level {b['safe_level']}" + (f"  candidate {b['candidate']}" if "candidate" in b else ""))
+            print(f"    motor noise: proven-safe level {_per_axis(b['safe_level'])}"
+                  + (f"  candidate {_per_axis(b['candidate'])}" if "candidate" in b else ""))
         for p in b["non_rpm_peaks"]:
             print(f"    non-RPM peak {p['axis']:5s} at {p['apparent_hz']:6.1f} Hz (+{p['db_above_floor']:.0f} dB)"
                   + ("  PERSISTENT across throttle" if p.get("persistent") else "  (moves with throttle)"))
@@ -393,7 +484,7 @@ def cmd_emit(a) -> int:
     wb = _wb(a)
     tune, reasons = wb.load(a.file)
     dest = Path(a.to) if a.to else Path(a.out)
-    res = wb.emit(tune, reasons, extra={"method": "bftune agent (tune skill)"}, log=_log, dest=dest)
+    res = wb.emit(tune, reasons, extra={"method": "bftune agent (tune skill)"}, log=_log, dest=dest, profile=a.profile)
     print((dest / "tune_cli.txt").read_text())
     return 0 if res["verdict"] == "PASS" else 2
 
@@ -442,9 +533,10 @@ def cmd_synth(a) -> int:
 
 def _wb_args(s, out_default="bftune_out") -> None:
     s.add_argument("-o", "--out", default=out_default, help="analysis directory (from `bftune analyze`)")
-    s.add_argument("--style", default="freestyle", choices=STYLES)
-    s.add_argument("--noise-budget", type=float, default=0.9,
-                   help="allowed motor noise as a multiple of the proven-safe level (default 0.9)")
+    s.add_argument("--style", default=None, choices=STYLES,
+                   help="flying style (default: the one stored with `bftune targets`, else freestyle)")
+    s.add_argument("--noise-budget", type=float, default=None,
+                   help="allowed motor noise as a multiple of the proven-safe level (default: targets / style)")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -467,12 +559,14 @@ def main(argv: list[str] | None = None) -> int:
         s.add_argument("--safe-log", action="append",
                        help="log of another tune of this quad that flew with cool motors (sets the noise budget)")
         s.add_argument("--safe-cli", action="append", help="CLI diff of another proven-safe tune")
+        s.add_argument("--exclude", action="append", metavar="T0:T1",
+                       help="ignore this time window (s), e.g. a crash; repeatable")
         s.add_argument("--any-firmware", action="store_true",
                        help="analyze firmware older than the model (2026.6) anyway: margins/CLI may be wrong")
         s.add_argument("-o", "--out", default="bftune_out")
         if name == "all":
-            s.add_argument("--style", default="freestyle", choices=STYLES)
-            s.add_argument("--noise-budget", type=float, default=0.9)
+            s.add_argument("--style", default=None, choices=STYLES)
+            s.add_argument("--noise-budget", type=float, default=None)
             s.add_argument("--passes", type=int, default=2)
             s.add_argument("--maxiter", type=int, default=25)
         s.set_defaults(fn=fn)
@@ -483,6 +577,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--index", type=int, default=None, help="log session index (default: longest)")
     s.add_argument("-v", "--verbose", action="store_true", help="show evidence, causes and knobs")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--exclude", action="append", metavar="T0:T1",
+                   help="ignore this time window (s), e.g. a crash; repeatable")
     s.set_defaults(fn=cmd_diagnose)
 
     s = sub.add_parser("brief", help="compact JSON situation report for the agent (writes OUT/brief.json)")
@@ -505,6 +601,8 @@ def main(argv: list[str] | None = None) -> int:
                                       "rpm per command, telemetry jitter")
     s.add_argument("logs", nargs="+")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--exclude", action="append", metavar="T0:T1",
+                   help="ignore this time window (s), e.g. a crash; repeatable")
     s.set_defaults(fn=cmd_motors)
 
     s = sub.add_parser("applied", help="check a dump taken after pasting: is the delivered CLI on the quad, "
@@ -515,6 +613,16 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_applied)
 
+    s = sub.add_parser("targets", help="show or set the design targets for this analysis (each value says where "
+                                       "it came from: the data, a convention or your override; the safety floor is fixed)")
+    s.add_argument("-o", "--out", default="bftune_out")
+    s.add_argument("--set", action="append", metavar="KEY=VALUE[#reason]",
+                   help="e.g. --set 'style=race' --set 'ms_max=2.2 # racer accepts more sensitivity for crossover'")
+    s.add_argument("--unset", action="append", metavar="KEY")
+    s.add_argument("--reset", action="store_true", help="drop all overrides")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_targets, style=None, noise_budget=None)
+
     s = sub.add_parser("tunes", help="group logs by the tune they flew (headers only, instant); check a dump against them")
     s.add_argument("logs", nargs="+")
     s.add_argument("--dump", help="CLI dump/diff to match against the logs' tunes")
@@ -522,10 +630,35 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_tunes)
 
+    s = sub.add_parser("logs", help="log report (one log) or comparison (several): findings, measured step response, "
+                       "error spectrum, noise-vs-throttle spectrograms, time windows -> DIR/logs.html + PNGs")
+    s.add_argument("logs", nargs="+")
+    s.add_argument("-o", "--out", default="bftune_logs")
+    s.add_argument("--dump", help="CLI dump (single log only)")
+    s.add_argument("--index", type=int, default=None, help="log session index (default: longest)")
+    s.add_argument("--window", action="append", metavar="T0:T1", help="also plot this time window (seconds)")
+    s.add_argument("--no-spectrogram", action="store_true", help="skip the spectrograms (faster)")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--exclude", action="append", metavar="T0:T1",
+                   help="ignore this time window (s), e.g. a crash; repeatable")
+    s.set_defaults(fn=cmd_logs)
+
+    s = sub.add_parser("plot", help="one figure to look at: time window (sticks, gyro, D-term, motors, rpm) "
+                       "or --spectrogram (noise vs throttle)")
+    s.add_argument("log")
+    s.add_argument("-o", "--out", default="plot.png")
+    s.add_argument("--dump")
+    s.add_argument("--index", type=int, default=None)
+    s.add_argument("--window", action="append", metavar="T0:T1")
+    s.add_argument("--spectrogram", action="store_true")
+    s.set_defaults(fn=cmd_plot)
+
     s = sub.add_parser("errspec", help="free-flight tracking-error spectrum of one or more logs (pilot cross-check)")
     s.add_argument("logs", nargs="+")
     s.add_argument("--by-throttle", type=float, metavar="T", help="split each log at this throttle (e.g. 0.35)")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--exclude", action="append", metavar="T0:T1",
+                   help="ignore this time window (s), e.g. a crash; repeatable")
     s.set_defaults(fn=cmd_errspec)
 
     s = sub.add_parser("safe", help="list proven-safe tunes, or add them (logs or CLI diffs) to an existing analysis")
@@ -595,6 +728,8 @@ def main(argv: list[str] | None = None) -> int:
     _wb_args(s)
     s.add_argument("file")
     s.add_argument("--to", help="write the deliverables here instead of the analysis directory (e.g. the tune folder)")
+    s.add_argument("--profile", type=int, choices=range(4), metavar="N",
+                   help="PID profile index when no dump gives it (e.g. from the project's earlier dumps; confirm with the pilot)")
     s.set_defaults(fn=cmd_emit)
 
     s = sub.add_parser("optimize", help="optional automatic baseline (slow global search, 10-60 min)")

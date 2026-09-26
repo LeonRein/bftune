@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .bbl import Log
 
@@ -106,8 +107,19 @@ def parse_dump(text: str) -> Config:
 
 
 def load_dump(path: str) -> Config:
-    with open(path, encoding="utf-8", errors="replace") as fh:
-        return parse_dump(fh.read())
+    """A CLI dump/diff, or a blackbox log whose header holds the tune on the quad now (its last session):
+    for "the quad still runs the tune from log X" when no fresh dump exists."""
+    raw = Path(path).read_bytes()
+    if raw.lstrip()[:9] == b"H Product":
+        from types import SimpleNamespace
+
+        from .bbl import _parse_headers, split_logs
+
+        a, b = split_logs(raw)[-1]
+        cfg = config_from_headers(SimpleNamespace(headers=_parse_headers(raw, a, b)[0]))
+        cfg.source = f"log header ({Path(path).name})"
+        return cfg
+    return parse_dump(raw.decode("utf-8", errors="replace"))
 
 
 # Blackbox header keys that map 1:1 (or with a transform) onto CLI setting names.

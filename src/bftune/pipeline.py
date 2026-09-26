@@ -46,7 +46,9 @@ class Analysis:
     quad_tune: Tune | None = None  # tune on the quad now, when the dump belongs to a different tune than the log
 
     def flight(self) -> Flight:
-        return load_flight(self.log_path, self.dump_path, self.log_index)
+        from .flight import exclude
+
+        return exclude(load_flight(self.log_path, self.dump_path, self.log_index), self.extra.get("excluded"))
 
 
 def _plant_dict(ai) -> dict:
@@ -125,10 +127,15 @@ def firmware_support(version: str | None) -> tuple[str, str]:
 
 def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | None = None, plots: bool = True,
             log=print, safe_logs: list[str] | None = None, safe_cli: list[str] | None = None,
-            any_firmware: bool = False) -> Analysis:
+            any_firmware: bool = False, excluded: list[tuple[float, float]] | None = None) -> Analysis:
     out.mkdir(parents=True, exist_ok=True)
     log(f"decoding {log_path} ...")
     fl = load_flight(log_path, dump_path, log_index)
+    if excluded:
+        from .flight import exclude
+
+        exclude(fl, excluded)
+        log(f"excluded (treated as disarmed): {', '.join(f'{a:g}-{b:g} s' for a, b in excluded)}")
     level, msg = firmware_support(fl.cfg.firmware_version)
     if level == "older" and not any_firmware:
         raise SystemExit("bftune analyze: " + msg + " (override with --any-firmware at your own risk)")
@@ -159,6 +166,7 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     an = Analysis(str(Path(log_path).resolve()), str(Path(dump_path).resolve()) if dump_path else None, log_index, tune, idn, nm,
                   fl.cfg.craft_name,
                   fl.cfg.firmware_version, val, warns)
+    an.extra["excluded"] = list(excluded or [])
     an.summary = summarize(fl)
     if fl.cfg.mismatch:
         an.quad_tune = Tune.from_config(fl.cfg.quad)
@@ -170,6 +178,10 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     from .analysis.diagnose import diagnose
 
     an.diagnosis = diagnose(fl)
+    from .report.logs import measured_steps, step_summary
+
+    steps = measured_steps(fl)  # stick lag as flown: the direct check of the model's stick-lag prediction
+    an.extra["measured_step"] = {ax: step_summary(r) for ax, r in steps.items()}
     for pth in safe_logs or []:
         an.safe.append((f"safe:{Path(pth).name}", safe_tune_from_log(pth)))
     for pth in safe_cli or []:
@@ -210,17 +222,37 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
         "safe_tunes": [n for n, _ in an.safe],
         "dump_mismatch": [{"setting": k, "log": h, "dump": d} for k, h, d in fl.cfg.mismatch],
         "diagnosis": an.diagnosis,
+        "measured_step": an.extra["measured_step"],
         "notes": idn.notes,
         "warnings": an.warnings,
     }
     (out / "analysis.json").write_text(json.dumps(summary, indent=1, default=float))
     if plots:
         from .report import plots as P
+        from .report.analysis import analysis_figures, write_analysis_report
 
         P.plant_bode(idn, out / "plant_bode.png")
         P.motor_model_plot(idn.motor, out / "motor_model.png")
+        model = model_steps(out, fl)
+        an.extra["model_step"] = summary["model_step"] = {ax: step_summary(m) for ax, m in model.items()}
+        save_analysis(an, out)
+        (out / "analysis.json").write_text(json.dumps(summary, indent=1, default=float))
+        analysis_figures(out, fl, steps, model)
+        log(f"wrote {write_analysis_report(out, an, summary)}")
     log(f"wrote {out/'analysis.json'}")
     return an
+
+
+def model_steps(out: Path, fl: Flight) -> dict:
+    """The model's step response for the flown tune per axis, through the same estimator as the measured one."""
+    try:
+        from .workbench import Workbench
+
+        wb = Workbench(Path(out))
+        res = {AXES[a]: wb.model_step(wb.logged, a, fl) for a in wb.idn.axes}
+        return {k: v for k, v in res.items() if v is not None}
+    except Exception:  # noqa: BLE001 - a figure must not break the analysis
+        return {}
 
 
 def load_analysis(out: Path) -> Analysis:
@@ -265,7 +297,7 @@ def archetype_seed(an: Analysis) -> dict:
     }
 
 
-def optimize(out: Path, style: str = "freestyle", passes: int = 2, maxiter: int = 25, noise_budget: float = 0.9,
+def optimize(out: Path, style: str | None = None, passes: int = 2, maxiter: int = 25, noise_budget: float | None = None,
              log=print, seeds: dict | None = None) -> dict:
     """Automatic baseline: multi-start global search + rules, emitted through the workbench.
 
@@ -273,14 +305,15 @@ def optimize(out: Path, style: str = "freestyle", passes: int = 2, maxiter: int 
     agent-driven procedure in skills/tune (assess, sweep, suggest, ff, emit).
     """
     from .optimize import rules
-    from .optimize.search import FILTER_KEYS, Goals, multi_start_search
+    from .optimize.search import FILTER_KEYS, multi_start_search
     from .workbench import Workbench
 
     out = Path(out)
     wb = Workbench(out, style=style, noise_budget=noise_budget)
     an, src, old = wb.an, wb.src, wb.logged
     safe = [t for _, t in an.safe]
-    goals = Goals.for_style(style, noise_budget=noise_budget)
+    goals = wb.goals  # the design targets of this analysis (data-derived bands, conventions, the agent's overrides)
+    style = goals.style
     if seeds is None:
         seeds = {"current": {}, "rpm-first": archetype_seed(an)}
         for name, t in an.safe:

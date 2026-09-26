@@ -6,9 +6,11 @@ user-invocable: false
 
 # Craft classes and special setups
 
-## Plausible identified parameters
-A result far outside its class points to a problem: a damaged prop, a loose FC, desyncs, or a wrong
-`motor_poles`.
+## Rough plausibility hints for identified parameters
+These ranges are rough, from general knowledge plus a few measured quads. They are **not limits**.
+A result far outside them is a reason to look closer: a damaged prop, a loose FC, desyncs, a wrong
+`motor_poles`, or simply an unusual build. Trust the identification gates (chain check, validation)
+over this table.
 
 | class | loop | hover motor Hz | K roll [°/s² per pidSum] | motor τ at hover | delay T | typical crossover |
 |---|---|---|---|---|---|---|

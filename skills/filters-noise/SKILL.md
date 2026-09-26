@@ -13,18 +13,55 @@ without an anti-alias filter. bftune fits one 8 kHz gyro-noise spectrum that exp
 aliasing. That spectrum predicts the noise *at the motors* (P+D path × thrust_linear slope) for any
 candidate.
 
-**Budget:** per throttle band and axis, a candidate's predicted motor noise must stay ≤ 0.9 × the
-level of a **proven-safe** tune. It may also stay at or below the flown tune's own level: that
-level has flown, so no forced cut. The 0.9 margin guards against model error when you go *above* what
-flew, towards a safe-log reference. References:
-- by default, the logged tune (ask how warm the motors were);
-- `--safe-log` / `--safe-cli`: other tunes of the same quad that flew with cool motors. This raises
-  the reference, and it is the most valuable extra input.
-  - "Cool or slightly warm" qualifies. "Warm" qualifies only with `--noise-budget 0.8-0.85`.
-  - A safe log needs no dump: the blackbox header contains its full tune.
-- If the motors were **warm**, use `--noise-budget 0.85`; if **hot**, 0.7-0.8. A budget below 0.9
-  disables the flown-tune allowance, so the candidate must really cut noise.
-- Raise the budget above 0.9 only with evidence.
+**Budget.** Per throttle band and axis, a candidate's predicted motor noise is compared with the
+level of a **proven-safe** tune: the logged tune, plus every `--safe-log`/`--safe-cli` tune of the
+same quad. The allowed multiple, `noise_budget`, is a design target that **you set from the
+pilot's motor temperature** (`bftune targets --set 'noise_budget=… # why'`). There is no fixed
+number:
+
+These steps are a heuristic starting point (from the physics below and two quads), not a measured
+law. Adjust them with the pilot's feedback on this quad:
+
+| motors after a hard pack on the reference tune | noise_budget | meaning |
+|---|---|---|
+| cold (ambient, can't tell they ran) | 1.25 | real headroom; go up in one step |
+| cool | 1.1 | some headroom |
+| slightly warm | 1.0 | hold the level; no forced cut |
+| warm (can't hold a finger on it for 5 s) | 0.85 | cut noise first |
+| hot | 0.7, and find the cause before tuning further | |
+
+- The flown tune's own level always passes when the budget is ≥ 0.9: it flew, so no forced cut.
+- Steps beyond 1.25× (up to the safety floor, 2×) need a supervised **noise-headroom flight**
+  (below).
+- Every output states the limit that applied ("limit 1.25x: budget" or "the flown tune's level").
+
+**Why a budget at all, if the motors are cold?** Motor heat is mostly I²R from the average current
+(thrust, weight, props, flying style). High-frequency noise in the motor command adds ripple current
+whose losses grow with the *square* of the noise. So on a cold motor, doubling the noise raises the
+noise share of the heat about 4×, but from a small base. Cold motors after hard flying mean real
+headroom. That's why "cold" gets a bigger step, and the headroom flight is the way to find the true
+limit. Noise costs more than heat, though, and these costs don't show up as temperature:
+- lost control authority: the D-term noise uses up mixer headroom, so more saturation in hard moves;
+- a noisier gyro path that lets resonances through: a mid-throttle oscillation can heat motors
+  within seconds;
+- ESC stress, desync risk at the extremes, audible whine and jello in the video (cinematic).
+
+**Hot motors on a healthy build mean something else is wrong.** A sane tune on a sound quad lands
+with cool motors. Hot motors after a normal pack point to:
+- too much D, or filtering that is too light (noise);
+- a resonance amplified by D (`noise` persistent peaks, `diagnose` resonance);
+- an oscillation (`diagnose`);
+- hardware: a bent prop, a dragging bearing, the wrong kV or props for the cell count, ESC
+  timing/demag, or a motor stall (`bftune motors`).
+
+Find the cause before you cut D.
+
+**Absolute context (not limits).** `diagnose` reports `motor_hf_noise` (HF motor-command RMS, % of
+range). Seen so far:
+- 3.5" 4S at 1 kHz logging: 1.2 % cool, 1.7 % slightly warm, 2.2 % cool to slightly warm;
+- 5" 6S: 1.0-1.5 % cold.
+
+Compare within one quad and log rate; across quads it is only a rough hint.
 
 `bftune noise -o A [cand.txt]` shows, per throttle band: the measured D-term and gyro RMS, the fit
 error, non-RPM peaks (apparent frequency, **persistent** across bands or not), the safe level and the
@@ -36,8 +73,8 @@ unknown and may be far higher. On the reference 3.5" a tune with 4-5× the D-ter
 cool. When the budget is the binding limit, and the pilot wants more:
 1. Build a candidate with lighter filtering: dyn notch off or fewer notches, a D-term LPF opened up
    one step, RPM filter at a lower Q. Keep the gains that pass on the model, at predicted noise of
-   about 1.3-1.6× the reference (`--noise-budget 1.6` for that assess/emit only). Say plainly
-   that this is an experiment.
+   about 1.3-1.6× the reference (`--noise-budget 1.6` for that assess/emit only; the floor is 2×).
+   Say plainly that this is an experiment.
 2. The flight protocol: hover 30 s, land, touch the motors. Then one minute of normal flying, land,
    touch them again. Stop if any motor is too hot to hold a finger on.
 3. If they stay cool or only slightly warm, add that log as `--safe-log`. It is now a proven

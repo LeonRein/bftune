@@ -9,19 +9,27 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob, Grep
 
 1. **Reload the context.** Read `quad.md`, `history.md` and the last `tunes/NN-*/` (worklog,
    `tune.json`, report). Know what was predicted and why each change was made.
-2. **Collect the pilot's report,** in one message, only for what's missing:
-   - motor temperature after a hard pack: cool, warm or hot. **Hot means stop and back off noise
-     first, whatever else.**
-   - propwash (dives, flips at low throttle), bounce-back after flips and rolls, oscillation on
-     punch-outs, stick feel (locked-in, floaty, twitchy, laggy), anything new;
-   - better or worse than the previous tune, and whether they changed props, battery or anything else.
+2. **Collect the pilot's report right away,** in your first reply and in one message. Ask only
+   for what's missing, and don't run heavy analysis before asking:
+   - motor temperature after a hard pack: cold, cool, slightly warm, warm or hot. **Hot means stop
+     and back off noise first, whatever else.**
+   - did it get better on the priorities in `quad.md`? What stood out: stick feel, propwash,
+     punch-outs, bounce-back, anything new?
+   - **what the next iteration should prioritise** (the same ranking as before, or a new one), or
+     whether they are happy to stop;
+   - whether they changed props, battery or anything else, and a fresh `diff all` if they changed
+     settings themselves.
 
-   Quote them in `history.md`.
+   Quote them in `history.md` and update the priorities in `quad.md`.
 3. **New log of the flown tune?** First run `bftune tunes NEW_LOG [OLDER_LOGS] --dump NEW_DUMP` to make sure the log really
    flew the delivered tune (pilots tweak things between flights).
-   - `bftune diagnose NEW_LOG PREVIOUS_LOG -v` and `bftune errspec NEW_LOG PREVIOUS_LOG` compare the
-     flights stratum by stratum. Only large differences (> 3 dB, clearly different findings) count,
-     because flying styles differ between flights.
+   - `bftune logs PREVIOUS_LOG NEW_LOG -o <dir>/tunes/NN-date/compare` compares the flights in one
+     report (`logs.html`): settings that differ, findings, measured step response (stick lag and
+     overshoot as flown), tracking-error spectrum, spectrograms and how hard each flight was flown.
+     Open the PNGs and look. Only large differences (> 3 dB, clearly different findings, a few ms of
+     lag) count, because flying styles differ between flights; `bftune errspec --by-throttle` splits
+     by throttle when the flights differ.
+   - The measured stick lag is the direct check of the model's stick-lag prediction in the worklog.
    - `bftune analyze NEW_LOG --dump NEW_DUMP -o <dir>/analysis/NN --safe-log ...`: if the motors
      stayed cool, the flown tune becomes a new proven-safe reference (`--safe-log` for the next
      analysis, or `bftune safe -o A --log NEW_LOG`).

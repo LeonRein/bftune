@@ -103,6 +103,14 @@ def load_flight(bbl_path: str | Path, dump_path: str | Path | None = None, log_i
     return flight_from_log(log, cfg)
 
 
+def exclude(fl: Flight, windows: list[tuple[float, float]]) -> Flight:
+    """Treat these time windows (s) as disarmed, so every flight-data analysis skips them (a crash, a bench test)."""
+    for t0, t1 in windows or []:
+        sel = (fl.t >= t0) & (fl.t < t1)
+        fl.mode_mask = np.where(sel, fl.mode_mask & ~np.int64(1 << BOX_ARM), fl.mode_mask)
+    return fl
+
+
 def tuning_keys() -> set[str]:
     """Settings that shape flight behaviour (model inputs and everything the agent may tune)."""
     from .coverage import FEATURES

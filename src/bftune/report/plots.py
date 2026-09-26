@@ -17,6 +17,15 @@ from ..model.params import Tune, thrust_linear_slope
 from ..model.plant import Plant
 
 C_OLD, C_NEW, C_MEAS, C_ALT = "#6b7280", "#2563eb", "#111827", "#d97706"
+AXIS_COLORS = {"roll": "#2563eb", "pitch": "#16a34a", "yaw": "#d97706"}
+
+# one look for every bftune figure (reports embed them; the agent can open the PNGs to inspect them)
+plt.rcParams.update({
+    "figure.dpi": 100, "savefig.dpi": 110, "savefig.bbox": "tight", "font.size": 10, "axes.titlesize": 11,
+    "axes.titleweight": "bold", "axes.labelsize": 10, "axes.grid": True, "grid.alpha": 0.3, "grid.linestyle": "-",
+    "axes.spines.top": False, "axes.spines.right": False, "legend.fontsize": 8, "legend.frameon": False,
+    "axes.prop_cycle": plt.cycler(color=["#2563eb", "#6b7280", "#16a34a", "#d97706", "#dc2626", "#7c3aed"]),
+})
 
 
 def plant_bode(idn, path: Path) -> Path:

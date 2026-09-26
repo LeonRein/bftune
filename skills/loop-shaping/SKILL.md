@@ -6,20 +6,70 @@ user-invocable: false
 
 # Loop shaping
 
+## Design targets: derive them from the evidence, within a fixed safety floor
+bftune has no table of "correct" limits for a whoop or a 10", or for a racer or a filmer. You set
+the targets for **this** quad and pilot from what you know. `bftune targets -o A` shows every
+target with its source:
+- `from the flown tune`: derived from the data. The performance and tracking bands scale with the
+  flown tune's hover crossover, so they fit a whoop and a 10" alike.
+- `convention`: a neutral starting point from general control practice or FPV habit (Ms 2.0, PM
+  42°, GM 6 dB, FF overshoot 10/15 %, I/P 1.5, D/P 0.4-1.2, noise budget 1.0). **Not a
+  measurement.** Confirm it or replace it with a value you can justify.
+- `override`: yours, with the reason you gave.
+
+**How to derive them:**
+1. **Calibrate against the tunes that flew.** `bftune assess -o A --with-current --with-safe` gives
+   the margins of every flown tune on this model, and the pilot has told you how each felt. For
+   example: "tune E felt really good, hover Ms 1.9 at 44 Hz" means about 1.9 is acceptable to this
+   pilot; "the hot tune wobbled, Ms 3.3 at 46 Hz" means stay well below 3.3. The flown tune's
+   D/P, I/P and FF overshoot are the same kind of evidence.
+2. **Apply the ranked priorities.** Tighten what the top priority needs and relax what it doesn't:
+   - response / latency: allow more FF overshoot;
+   - propwash: raise `idle_weight` and keep hover Ms where the pilot felt no wobble;
+   - smoothness: lower `ms_max` and the FF overshoot;
+   - efficiency: lower `noise_budget`.
+   Which knobs actually move stick lag and overshoot on this quad is a model question, not a rule:
+   `sweep --steps` over `feedforward_smooth_factor`, `rc_smoothing_auto_factor`, `f_*`, `d_max_*`,
+   P and D shows it (on one 5" FF smoothing cut both lag and overshoot, while more P/D and a D-max
+   boost *added* lag). Check the measured step response (`analysis.html`) before and after.
+3. **Use the physics you measured.** A quad with a long delay (big props, 4 kHz loop, slow ESC)
+   can't reach the phase margin of a light 3" at the same crossover. If a convention is
+   unreachable without giving up what the pilot wants, change the target, and say so.
+4. **Set and record them before the experiments,** each with its evidence:
+   ```
+   bftune targets -o A --set 'ms_max=2.0 # tune E (Ms 1.9) felt locked-in; the hot tune (3.3) wobbled' \
+                       --set 'noise_budget=1.25 # motors cold after hard packs'
+   ```
+   Copy them into `quad.md` → "Design targets". Every later `assess`/`sweep`/`grid`/`emit` uses them.
+
+**The safety floor is fixed:**
+- nominal cases: PM ≥ 30°, GM ≥ 4 dB, Ms ≤ 2.6;
+- uncertainty variants: PM ≥ 25°, GM ≥ 3 dB, Ms ≤ 3.2;
+- noise ≤ 2× a proven-safe level.
+
+These are loose conventions too, but they are the guardrail no override can cross: a loop beyond
+them is lightly damped whatever the pilot wants. A violation there reads "BELOW THE SAFETY FLOOR".
+Idle cases are judged relative to the flown tune (below).
+
+**Which knowledge lives where:** the Betaflight-specific knowledge (filter chain, PID/TPA/D-max/FF
+math, setting ranges) is in the model that every tool applies. Choosing targets needs only the
+evidence you have: the logs, the model's numbers for flown tunes, and the pilot.
+
 ## Reading `assess`
 - **Cases:** idle, hover (the identification point), mid (50 %), full (100 %). Each is evaluated
   at base D (`/d`) and at D-max (`/dmax`), plus variants: `hiK+delay` (more gain and delay),
   `loK` (less gain), and `dn@min` (dynamic notch at its lowest frequency).
   - With a chirp model the variants are +10 % gain / +0.3 ms and −12 %.
   - With a freestyle model they are +40 % / +0.8 ms and −30 %.
-- **Design limits** (freestyle; race is slightly looser; see `brief.json` → `goals`):
+- **Design limits** (the conventional starting values; the ones that apply are shown by `bftune targets`
+  and in `brief.json` → `targets`):
 
   | | nominal | robust variants |
   |---|---|---|
   | PM | ≥ 42° (race 40°, cinematic 50°) | ≥ 35° |
   | GM | ≥ 6 dB | ≥ 4 dB |
   | Ms | ≤ 2.0 | ≤ 2.4 |
-  | motor noise | ≤ 0.9 × proven-safe | |
+  | motor noise | ≤ noise_budget × proven-safe (set from motor temperature, `bftune:filters-noise`) | |
 
 - **Idle limits relative to the flown tune.** At very low rpm the motor lag is extrapolated, and some
   quads (large props, low idle) can't reach the idle design limits at all. When the tune that flew

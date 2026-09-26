@@ -40,7 +40,7 @@ class Goals:
     gm_min_db: float = 6.0
     gm_min_robust_db: float = 4.0
     dm_min_ms: float = 1.0  # delay margin (nominal)
-    noise_budget: float = 0.9  # motor noise vs the proven-safe level (10 % margin below it)
+    noise_budget: float = 1.0  # motor noise vs the proven-safe level; the agent sets it from motor temperature
     perf_band: tuple[float, float] = (3.0, 60.0)
     idle_weight: float = 0.6  # propwash: weight of the idle case in the objective
     max_i_zero_ratio: float = 0.2  # I zero frequency <= ratio * crossover
@@ -53,22 +53,15 @@ class Goals:
     tracking_band: tuple[float, float] = (1.0, 15.0)
     d_over_p: tuple[float, float] = (0.4, 1.2)  # allowed D/P ratio (Betaflight units) on roll/pitch
     gain_range: tuple[float, float] = (0.5, 2.5)  # P and D relative to the logged (anchor) tune
+    ff_overshoot_flick: float = 10.0  # feedforward targets (% overshoot of a 300 deg/s flick / a fast snap)
+    ff_overshoot_snap: float = 15.0
 
     @classmethod
     def for_style(cls, style: str, noise_budget: float | None = None) -> Goals:
-        g = cls(style=style)
-        if style == "freestyle":
-            # Ms <= 2.0 is the propwash-relevant limit; flown tunes that pilots rated "feels good" sat at hover
-            # PM 42-47 deg with Ms <= 2.0 (3.5" and 5", 2026-09), so the nominal PM floor is 42 deg
-            g.pm_min = 42.0
-        elif style == "race":
-            g.ms_max, g.pm_min, g.perf_band, g.idle_weight = 2.1, 40.0, (5.0, 80.0), 0.3
-            g.i_over_p = (1.7, 1.7, 1.7)
-        elif style == "cinematic":
-            g.ms_max, g.pm_min, g.perf_band, g.idle_weight, g.noise_budget = 1.7, 50.0, (2.0, 40.0), 0.8, 0.8
-        if noise_budget is not None:
-            g.noise_budget = noise_budget
-        return g
+        """Conventions for a style (see optimize/targets.py; the agent overrides them from the data)."""
+        from .targets import build_goals
+
+        return build_goals(style, None, None, noise_budget)[0]
 
 
 @dataclass
@@ -529,6 +522,14 @@ def case_limits(c, g: Goals) -> dict:
     return {**base, **(c.limits or {})}
 
 
+def _below_floor(r: dict, pm: float, robust: bool) -> bool:
+    from .targets import SAFETY_FLOOR as F
+
+    sfx = "_robust" if robust else ""
+    return (pm < F["pm_min" + sfx] - 0.5 or r["gm_db"] < F[("gm_min_robust_db" if robust else "gm_min_db")] - 0.2
+            or r["ms"] > F["ms_max" + sfx] + 0.02)
+
+
 def violations(rows: list[dict], goals: Goals, noise_ratio: float | None = None) -> list[str]:
     """Human-readable list of violated constraints for one axis (empty = all met)."""
     out = []
@@ -541,13 +542,16 @@ def violations(rows: list[dict], goals: Goals, noise_ratio: float | None = None)
         pm = r.get("pm_eff", r["pm"])
         bad = []
         if pm < pm_min - 0.5:
-            bad.append(f"PM {pm:.0f}°<{pm_min:.0f}°")
+            bad.append(f"PM {pm:.1f}°<{round(pm_min, 1):g}°")
         if r["gm_db"] < gm_min - 0.2:
-            bad.append(f"GM {r['gm_db']:.1f}<{gm_min:.0f} dB")
+            bad.append(f"GM {r['gm_db']:.1f}<{round(gm_min, 1):g} dB")
         if r["ms"] > ms_max + 0.02:
-            bad.append(f"Ms {r['ms']:.2f}>{ms_max:.1f}")
+            bad.append(f"Ms {r['ms']:.2f}>{round(ms_max, 2):g}")
         if bad:
-            out.append(f"{r['case']}: " + ", ".join(bad) + (" (limit = flown tune)" if r.get("relaxed") else ""))
+            tag = " (limit = flown tune)" if r.get("relaxed") else ""
+            if not r["case"].startswith("idle") and _below_floor(r, pm, rob):
+                tag += " - BELOW THE SAFETY FLOOR"
+            out.append(f"{r['case']}: " + ", ".join(bad) + tag)
     if noise_ratio is not None and noise_ratio > goals.noise_budget + 1e-6:
         out.append(f"motor noise {noise_ratio:.2f}x proven-safe level (limit {goals.noise_budget:.2f}x)")
     return out

@@ -107,23 +107,34 @@ def parse_candidate(base: Tune, text: str) -> tuple[Tune, dict[str, str]]:
 @dataclass
 class Workbench:
     out: Path
-    style: str = "freestyle"
-    noise_budget: float = 0.9
+    style: str | None = None  # None: from targets.json, else freestyle
+    noise_budget: float | None = None  # None: from targets.json / style default
     an: Analysis = field(init=False)
     goals: Goals = field(init=False)
 
     def __post_init__(self):
+        from .optimize.targets import build_goals, load_targets
+
         self.out = Path(self.out)
         self.an = load_analysis(self.out)
         if getattr(self.an, "summary", None) is None:
             raise SystemExit("analysis.pkl is from an older bftune version: re-run `bftune analyze`")
-        self.goals = Goals.for_style(self.style, noise_budget=self.noise_budget)
         self.src = self.an.summary
         self.idn = self.an.idn
+        self.targets = load_targets(self.out)
+        self.goals, self.target_sources = build_goals(self.style, None, self.targets.get("overrides"), self.noise_budget)
+        self.style = self.goals.style
         safe = [t for _, t in self.an.safe]
         self.noise_ref = reference_noise(self.an.nm, [self.an.tune] + safe, self.src.loop_hz, self.idn) if self.an.nm.bands else None
         hf = [hf_filtering(t, self.idn, self.src.loop_hz) for t in [self.an.tune] + safe]
         self.hf_ref = (max(h[0] for h in hf), max(h[1] for h in hf))
+        # frequency bands scale with the quad: derive them from the flown tune's hover crossover
+        fcs = [self._flown_rows(a).get("hover/d", {}).get("fc") for a in self.idn.axes if a < 2]
+        fcs = [x for x in fcs if x and x == x]
+        self.flown_hover_fc = float(np.mean(fcs)) if fcs else None
+        if self.flown_hover_fc:
+            self.goals, self.target_sources = build_goals(self.style, self.flown_hover_fc,
+                                                          self.targets.get("overrides"), self.noise_budget)
 
     # ----------------------------------------------------------------- tunes
     @property
@@ -193,8 +204,30 @@ class Workbench:
         for name, amp, ramp in (("flick", 300.0, 0.05), ("snap", min(600.0, 0.6 * max_rate(self.src, axis)), 0.03)):
             m = step_metrics(step_response(tune, axis, pl, op, self.idn.dt, self.src.loop_hz, rx, amplitude=amp,
                                            ramp_s=ramp, time_scale=self.idn.time_scale))
-            out[name] = {k: round(float(m[k]), 2) for k in ("tracking_lag_ms", "stick_lag_ms", "overshoot_pct", "settle_5pct_ms")}
+            out[name] = {k: round(float(m[k]), 2) for k in ("tracking_lag_ms", "stick_lag_ms", "overshoot_pct", "undershoot_pct",
+                                                            "settle_5pct_ms")}
         return out
+
+    def model_step(self, tune: Tune, axis: int, fl) -> dict | None:
+        """The model's answer to the measured step response: the model (at the hover operating point) replays the
+        logged setpoint - which Betaflight records after RC smoothing (blackbox.c: pidGetPreviousSetpoint) - through
+        FF and the loop, and the same windows and Wiener estimator as `bftune logs` turn it into a step. Estimator
+        bias cancels, so the two can be compared directly (analysis.logstep)."""
+        from .analysis.logstep import log_step_response
+        from .analysis.loop import reference_fr
+        from .optimize.rules import rx_rate_hz
+
+        ai = self.idn.axes[axis]
+        boost = 1.0 if (tune.i("d_max_gain") > 0 or tune.i("d_max_advance") > 0) else 0.0
+        op = OperatingPoint(throttle=ai.op.throttle, motor_hz=ai.op.motor_hz, vbat=ai.op.vbat, d_boost=boost,
+                            dyn_notch_hz=ai.op.dyn_notch_hz)
+        f = np.fft.rfftfreq(fl.n, 1.0 / fl.fs)
+        f[0] = 1e-6
+        T, H_sp, _ = reference_fr(tune, axis, self._plant_for(axis, tune), op, f, self.idn.dt, self.src.loop_hz,
+                                  rx_rate_hz(self.src), self.idn.time_scale)
+        sp = fl.setpoint[:, axis]
+        y = np.fft.irfft(T / H_sp * np.fft.rfft(sp - sp.mean()), fl.n) + sp.mean()
+        return log_step_response(fl, axis, gyro=y)
 
     def axis_problem(self, tune: Tune, axis: int, relax_idle: bool = True) -> AxisProblem:
         cases = build_cases(self.src, self.idn, tune, axis, self.goals)
@@ -271,12 +304,6 @@ class Workbench:
         if steps:
             res["step"] = self.step_metrics(tune, axis)
         return res
-
-    def _first_violation(self, base: Tune, axis: int, r) -> str:
-        ax = AXES[axis]
-        t = base.copy().set(f"p_{ax}", r.p).set(f"i_{ax}", r.i).set(f"d_{ax}", r.d).set(f"d_max_{ax}", r.d_max)
-        v = self.assess_axis(t, axis, steps=False)["violations"]
-        return (v[0] + (f" (+{len(v) - 1} more)" if len(v) > 1 else "")) if v else "none under the delivery gate"
 
     def noise_limit(self, axis: int) -> float:
         """Allowed motor noise (x proven-safe level): the budget, or the flown tune's own level if higher
@@ -387,7 +414,10 @@ class Workbench:
         if self.relative_gate:
             notes.insert(0, "NO CHIRP: plant gain uncertain (±40 %). Verdict = no worse than the flown tune in every "
                             "failing case (relative gate), not the absolute design margins. Keep changes small; fly a chirp.")
-        return {"verdict": verdict, "gate": "relative" if self.relative_gate else "absolute", "axes": per, "notes": notes, "range_problems": problems,
+        overridden = {k: getattr(self.goals, k) for k, v in self.target_sources.items() if v in ("override", "command line")}
+        return {"verdict": verdict, "gate": "relative" if self.relative_gate else "absolute",
+                "targets": {"style": self.goals.style, "overrides": overridden},
+                "axes": per, "notes": notes, "range_problems": problems,
                 "hf_filtering": {"gyro": round(g, 4), "gyro_dterm": round(dchain, 5), "safe_max": [round(x, 5) for x in self.hf_ref]}}
 
     # ----------------------------------------------------------------- exploration
@@ -430,14 +460,17 @@ class Workbench:
             if prob.noise_Q is not None and self.noise_ref:
                 prob.noise_limit = self.noise_limit(a)
             r = optimize_axis(prob, base, maxiter=maxiter)
-            if self.relative_gate:  # feasibility = the gate the delivery uses (relative to the flown tune)
-                ax = AXES[a]
-                t = base.copy().set(f"p_{ax}", r.p).set(f"i_{ax}", r.i).set(f"d_{ax}", r.d).set(f"d_max_{ax}", r.d_max)
-                r.feasible = not self.assess_axis(t, a, steps=False)["violations"]
+            # feasibility = the gate the delivery uses (every case incl. D-max and robust variants), not the search's own
+            ax = AXES[a]
+            t = base.copy().set(f"p_{ax}", r.p).set(f"i_{ax}", r.i).set(f"d_{ax}", r.d).set(f"d_max_{ax}", r.d_max)
+            chk = self.assess_axis(t, a, steps=True)
+            r.feasible = not chk["violations"]
+            lag0 = self.step_metrics(base, a)["flick"]["stick_lag_ms"]
             out[AXES[a]] = {"p": r.p, "i": r.i, "d": r.d, "d_max": r.d_max, "feasible": r.feasible,
+                            "violations": chk["violations"][:3],
+                            "stick_lag_ms": [lag0, chk["step"]["flick"]["stick_lag_ms"]] if "step" in chk else None,
                             "noise_vs_safe": round(float(r.noise_ratio), 3), "worst": {k: round(float(v), 2) for k, v in r.worst.items()},
-                            **({} if r.feasible else {"note": "no gains in range meet every limit; least-violating point",
-                                                      "violated": self._first_violation(base, a, r)}),
+                            **({} if r.feasible else {"note": "does not pass every case; least-violating point found"}),
                             **({"range": "±15 % of the flown P/D (no chirp)"} if self.relative_gate else {})}
         return out
 
@@ -496,12 +529,12 @@ class Workbench:
 
     # ----------------------------------------------------------------- deliverable
     def emit(self, tune: Tune, reasons: dict[str, str] | None = None, extra: dict | None = None, log=print,
-             dest: Path | None = None) -> dict:
+             dest: Path | None = None, profile: int | None = None) -> dict:
         from .emit.cli import cli_block, diff_table
         from .noise.model import predict as predict_noise
         from .optimize.rules import rx_rate_hz
         from .report import plots as P
-        from .report.markdown import write_report
+        from .report.tune import write_report
 
         dest = Path(dest) if dest else self.out
         dest.mkdir(parents=True, exist_ok=True)
@@ -519,14 +552,15 @@ class Workbench:
             ass[name] = self.assess(t)
         verdict = ass["new"]["verdict"]
         viol = {ax: e["violations"] for ax, e in ass["new"]["axes"].items()}
-        comment = [f"style: {self.style}; model-predicted margins and noise in report.md"]
+        comment = [f"style: {self.style}; model-predicted margins and noise in report.html"]
         if verdict == "FAIL":
             comment.append("WARNING: the model predicts violated constraints for this tune:")
             comment += [f"  {ax}: {v}" for ax, vs in viol.items() for v in vs] + [f"  {p}" for p in ass["new"]["range_problems"]]
-            comment.append("Do NOT fly without reviewing report.md (see 'Verdict').")
+            comment.append("Do NOT fly without reviewing report.html (see 'Verdict').")
         if not self.an.nm.bands:
             comment.append("WARNING: no noise model - motor noise unchecked")
-        profile = self.src.cfg.active_profile if "dump" in self.src.cfg.source else None
+        if profile is None:  # known only from a real dump (or the agent: --profile from the project's older dumps)
+            profile = self.src.cfg.active_profile if "dump" in self.src.cfg.source else None
         apply_txt, revert_txt, problems = cli_block(old, new, profile=profile, craft=self.an.craft,
                                                     firmware=self.an.firmware, extra_comment=comment)
         (dest / "tune_cli.txt").write_text(apply_txt)
@@ -545,10 +579,16 @@ class Workbench:
             "verdict": verdict, "violations": viol, "noise_model": bool(self.an.nm.bands), "style": self.style,
             "changes": [{"setting": k, "old": o, "new": n, "reason": r} for k, o, n, r in rows],
             "unexplained_changes": missing, "assessment": ass, "problems": problems, "plots": plots,
-            "goals": {k: v for k, v in asdict(self.goals).items() if isinstance(v, (int, float))},
+            "goals": {k: v for k, v in asdict(self.goals).items() if isinstance(v, (int, float, tuple, str))},
+            "target_sources": self.target_sources, "target_reasons": self.targets.get("reasons", {}),
             **(extra or {}),
         }
         (dest / "tune.json").write_text(json.dumps(result, indent=1, default=float))
+        import shutil
+
+        for png in ("plant_bode.png", "motor_model.png"):
+            if (self.out / png).exists() and dest.resolve() != self.out.resolve():
+                shutil.copy(self.out / png, dest / png)
         write_report(dest, self.an, result, apply_txt, revert_txt)
         log(format_assessment({"new": ass["new"]}))
         if missing:
@@ -565,6 +605,10 @@ def _f(v, fmt="{:.1f}"):
 
 def format_assessment(ass: dict) -> str:
     lines = []
+    t = next(iter(ass.values()), {}).get("targets")
+    if t:
+        ov = ", ".join(f"{k}={v}" for k, v in t["overrides"].items()) or "none"
+        lines.append(f"[targets: style {t['style']}, overrides: {ov}] (`bftune targets` shows all values and their sources)")
     for name, a in ass.items():
         lines.append(f"{name}: {a['verdict']}")
         for ax, e in a["axes"].items():
@@ -618,9 +662,16 @@ def format_sweep(key: str, rows: list[dict]) -> str:
                 f"{_f(fu['pm'], '{:.0f}'):>6s}°  {w['pm']:4.0f}/{w['ms']:<5.2f} [{wc:18s}] {nz:>5s}  {e['objective_db']:6.2f}  "
                 f"{(v[0] + (f' (+{len(v) - 1})' if len(v) > 1 else '')) if v else '-'}{st}")
             first = False
-    sig = [tuple((r[ax]["hover"]["fc"], r[ax]["hover"]["ms"], r[ax]["objective_db"], r[ax]["noise_vs_safe"])
+    sig = [tuple((r[ax]["hover"]["fc"], r[ax]["hover"]["ms"], r[ax]["objective_db"], r[ax]["noise_vs_safe"],
+                  str(r[ax].get("step")))
                  for ax in AXES if ax in r) for r in rows]
-    if len(rows) > 1 and len(set(sig)) == 1:
+    has_steps = any("step" in r[ax] for r in rows for ax in AXES if ax in r)
+    if len(rows) > 1 and len(set(sig)) == 1 and not has_steps:
+        lines.append(f"note: margins, noise and objective are identical for every value of {key}. If it acts on the stick "
+                     "response (feedforward_*, rc_smoothing_*, iterm_relax*), rerun with --steps; otherwise it may be "
+                     "inactive (a notch needs its *_cutoff > 0, a static lowpass is ignored while *_dyn_min_hz > 0, "
+                     "tpa_low_* needs tpa_low_always = ON, dyn idle below the natural idle) or not modelled (`coverage`).")
+    elif len(rows) > 1 and len(set(sig)) == 1:
         lines.append(f"note: every value gives identical results - {key} has no effect here. It may be inactive "
                      "(a notch needs its *_cutoff > 0, a static lowpass is ignored while *_dyn_min_hz > 0, tpa_low_* "
                      "needs tpa_low_always = ON, dyn idle below the natural idle), or not modelled (see `coverage`).")
@@ -682,10 +733,10 @@ def _compact_axis(e: dict) -> dict:
 
 def brief(wb: Workbench) -> dict:
     """Everything the agent needs to start reasoning, in one compact JSON (see skills/toolbox)."""
-    from dataclasses import asdict
 
     from . import __version__
     from .emit.cli import changed_keys
+    from .optimize.targets import SAFETY_FLOOR, goals_dict
 
     an, idn, src = wb.an, wb.idn, wb.src
     keys = [k for g in GROUPS.values() for k in g]
@@ -737,15 +788,23 @@ def brief(wb: Workbench) -> dict:
             summary.append(f"proven-safe {s_['name']}: same tune as {s_['same_tune_as']}")
         else:
             summary.append(f"proven-safe {s_['name']}: {s_['verdict']}, differs in {len(s_['differs'])} settings")
+    meas = (getattr(an, "extra", None) or {}).get("measured_step") or {}
+    model_step = (getattr(an, "extra", None) or {}).get("model_step") or {}
+    lag_pairs = [f"{ax} {m['delay_50_ms']:.1f} vs {model_step[ax]['delay_50_ms']:.1f}"
+                 + ("" if m.get("confidence", "good") == "good" else f" ({m.get('confidence')} confidence)")
+                 for ax, m in meas.items() if ax in model_step]
+    if lag_pairs:
+        summary.append("step response 50 % time, measured in the log vs model for the flown tune [ms]: " + "; ".join(lag_pairs)
+                       + " (compare with the measurement's spread; a clear gap = the model misses something: bftune:evidence)")
     summary += [f"finding [{f['severity']}] {f['summary']}" for f in getattr(an, "diagnosis", []) if f["severity"] != "info"]
     return {
         "summary": summary,
         "bftune": __version__,
         "craft": an.craft, "firmware": an.firmware, "loop_hz": src.loop_hz, "log_rate_hz": src.fs,
         "style": wb.style,
-        "goals": {k: v for k, v in asdict(wb.goals).items() if k in (
-            "ms_max", "ms_max_robust", "pm_min", "pm_min_robust", "gm_min_db", "gm_min_robust_db", "noise_budget",
-            "d_over_p", "i_over_p")},
+        "targets": {"values": goals_dict(wb.goals), "sources": wb.target_sources,
+                    "reasons": wb.targets.get("reasons", {}), "flown_hover_crossover_hz": wb.flown_hover_fc,
+                    "safety_floor": SAFETY_FLOOR},
         "identification": ident,
         "flight": {
             "natural_idle_rpm_p20": round(src.idle_hz(20) * 60),
@@ -767,5 +826,7 @@ def brief(wb: Workbench) -> dict:
             "bands": [{k: b[k] for k in ("throttle", "motor_hz", "measured_dterm_rms", "fit_error") if k in b}
                       for b in noise["bands"]]},
         "diagnosis": getattr(an, "diagnosis", []),
+        "measured_step_as_flown": meas or None,
+        "model_step_flown_tune": model_step or None,
         "warnings": an.warnings,
     }
