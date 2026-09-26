@@ -4,8 +4,8 @@
 An audit of every number and rule in the skills and the judging code (about 460 items) against one question: does
 it need Betaflight source knowledge or control theory (the author's), or can the agent derive it better from this
 quad's logs, dump and pilot? The decisions and the rule are in `docs/knowledge-split.md`.
-- **The log sets the scales.** `analyze` measures a flight profile (hover throttle and motor frequency, throttle
-  use, the pilot's typical and fast stick moves, the RC link rate). Diagnose bands (resonance, propwash, I-term,
+- **The log sets the scales.** `analyze` measures a flight profile (hover throttle and motor frequency, the control
+  bandwidth from the setpoint -> gyro phase, throttle use, the pilot's typical and fast stick moves, the RC link rate). Diagnose bands (resonance, propwash, I-term,
   motor noise), throttle bands, the bounce-back trigger, the noise model's motion/noise boundary and the chirp
   quality warning scale with it instead of 5" numbers. The "mid" design case sits at the throttle the pilot uses.
 - **Robust variants from the data:** the gain spread between chirp rounds (5": ±11 % over 8 rounds), never

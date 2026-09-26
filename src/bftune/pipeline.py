@@ -80,10 +80,10 @@ def sanity_warnings(fl: Flight, idn: Identification | None) -> list[str]:
         if gaps.sum() > 0:
             w.append(f"{int(gaps.sum())} time gap(s) in the log (missing frames, {float(dt[gaps].sum()):.2f} s in total): "
                      "the logging device may not keep up with this rate; spectra near gaps are less reliable")
-    from .analysis.profile import hover
+    from .analysis.profile import control_scale, hover
     from .flight import motor_saturated
 
-    thr_h, hz_h = hover(fl)
+    thr_h, _ = hover(fl)
     part_thr = thr_h + 0.6 * (1 - thr_h)
     part = float(np.mean(motor_saturated(fl) & (fl.throttle < part_thr)))
     if part > 0.01:  # at full throttle (punch-outs) saturation is normal
@@ -97,7 +97,7 @@ def sanity_warnings(fl: Flight, idn: Identification | None) -> list[str]:
         for a, ai in idn.axes.items():
             if not ai.chain.passed:
                 w.append(f"{AXES[a]}: filter-chain check failed — the firmware model may not match this firmware")
-            need = 0.14 * hz_h if hz_h else 25.0  # ~25 Hz on a 5": the band must reach past the crossover
+            need = 1.3 * control_scale(fl)[0]  # ~25 Hz on a 5": the band must reach past the crossover
             if chirp and ai.coherent_to_hz < need:
                 w.append(f"{AXES[a]}: coherent band only up to {ai.coherent_to_hz:.0f} Hz (this quad's control band "
                          f"needs ~{need:.0f} Hz) - use more chirp amplitude or calmer air")

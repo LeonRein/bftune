@@ -17,7 +17,7 @@ without an anti-alias filter. bftune fits one gyro-noise spectrum at the gyro/lo
 explains gyroUnfilt (upper bound), gyroADC and the D term at the same time through their known
 filter chains and aliasing. That spectrum predicts the noise *at the motors* (P+D path ×
 thrust_linear slope) for any candidate. "Noise" is everything above this quad's control band
-(0.4 × the hover motor frequency: 70 Hz on a 5", higher on a whoop, lower on a 10").
+(3.7 × the control bandwidth measured in the log: 70 Hz on a 5", lower on a 10").
 
 **Budget.** Per throttle band and axis, a candidate's predicted motor noise is compared with the
 level of the **reference**: the highest level among the logged tune and every

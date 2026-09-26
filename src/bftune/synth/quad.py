@@ -55,6 +55,7 @@ class CraftSpec:
     gamma: float = 0.75  # steady-state motor curve: hz = idle + (max-idle)*cmd^gamma
     chirp_f1: float = 200.0  # per-class chirp end frequency (skills/flight-plan table)
     chirp_amp: tuple[float, float, float] = (230.0, 230.0, 180.0)
+    stick_rate: tuple[float, float] = (150.0, 500.0)  # the twin pilot's stick moves [deg/s], per craft
 
     def tau(self, hz: float) -> float:
         return 1.0 / (self.tau_c0 + self.tau_c1 * hz)
@@ -88,7 +89,7 @@ CRAFTS = {
         "10inch", loop_hz=4000, log_ratio=4, cells=6, hover_throttle=0.30, hover_hz=80, max_hz=190, idle_hz=35,
         tau_c0=8, tau_c1=0.12, K_roll=35, K_pitch=28, K_yaw=2.5, tz_yaw=0.25, T_esc=0.0015, T_gyro=0.0006,
         noise_white=0.3, noise_lines=(5.0, 2.0, 1.0), frame_mode_hz=95, frame_mode_amp=2.0, chirp_f1=120.0,
-        chirp_amp=(150.0, 150.0, 120.0),
+        chirp_amp=(150.0, 150.0, 120.0), stick_rate=(60.0, 220.0),
         tune={"p_roll": 60, "i_roll": 90, "d_roll": 45, "d_max_roll": 55, "p_pitch": 65, "i_pitch": 95, "d_pitch": 50,
               "d_max_pitch": 60, "p_yaw": 60, "i_yaw": 90, "gyro_lpf1_dyn_min_hz": 150, "gyro_lpf1_dyn_max_hz": 300,
               "dterm_lpf1_dyn_min_hz": 60, "dterm_lpf1_dyn_max_hz": 120, "dterm_lpf2_static_hz": 120,
@@ -156,7 +157,8 @@ def default_tune(spec: CraftSpec, target_pm: float = 40.0, target_gm_db: float =
 
 
 def _pilot_profile(spec: CraftSpec, n: int, dt: float, rng) -> tuple[np.ndarray, np.ndarray]:
-    """Freestyle-like stick and throttle inputs: rate steps on all axes, punch-outs and chops."""
+    """Freestyle-like stick and throttle inputs: stick moves with a human rise time (40-150 ms) on all axes,
+    punch-outs and chops. Move sizes per craft (spec.stick_rate): a 10" is flown with gentler moves than a 5"."""
     sp = np.zeros((n, 3))
     thr = np.zeros(n)
     t = 0
@@ -168,9 +170,12 @@ def _pilot_profile(spec: CraftSpec, n: int, dt: float, rng) -> tuple[np.ndarray,
         thr[t : t + len(ramp)] = ramp
         level = target
         ax = rng.integers(0, 3)
-        rate = rng.uniform(150, 500) * rng.choice([-1, 1]) * (0.6 if ax == 2 else 1.0)
+        rate = rng.uniform(*spec.stick_rate) * rng.choice([-1, 1]) * (0.6 if ax == 2 else 1.0)
         on = int(rng.uniform(0.1, 0.3) / dt)
-        sp[t : t + min(on, n - t), ax] = rate
+        rise = max(1, int(rng.uniform(0.04, 0.15) / dt))
+        shape = np.minimum(1.0, np.minimum(np.arange(on) + 1, on - np.arange(on)) / rise)
+        k = min(on, n - t)
+        sp[t : t + k, ax] = rate * shape[:k]
         t += seg
     return sp, np.clip(thr, 0.0, 1.0)
 
@@ -284,7 +289,7 @@ def simulate(
 
     step = spec.log_ratio
     n_log = n_total // step
-    out = {k: np.zeros((n_log, 3)) for k in ("gyro", "gyro_unfilt", "setpoint", "P", "I", "D", "F")}
+    out = {k: np.zeros((n_log, 3)) for k in ("gyro", "gyro_unfilt", "setpoint", "P", "I", "D", "F", "rc")}
     out_motor = np.zeros((n_log, 4))
     out_hz = np.zeros((n_log, 4))
     out_thr = np.zeros(n_log)
@@ -391,6 +396,7 @@ def simulate(
             u[a] = min(max(s, -lim2), lim2)
             if n % step == 0 and li < n_log:
                 out["setpoint"][li, a] = sp
+                out["rc"][li, a] = 500.0 * sp_raw[a] / max(spec.stick_rate[1], 1.0)  # stick deflection, rcCommand-like
                 out["P"][li, a], out["I"][li, a], out["D"][li, a], out["F"][li, a] = P, I[a], D, ffv
         # ---- mixer + motors ----
         thr = thr_now
@@ -457,5 +463,5 @@ def _to_flight(spec, tune, out, motor, hz, thr, dbg, n, f0, f1, chirp_s, amp) ->
         gyro=out["gyro"][:n], gyro_unfilt=out["gyro_unfilt"][:n], setpoint=out["setpoint"][:n], throttle=thr[:n],
         P=np.round(out["P"][:n]), I=np.round(out["I"][:n]), D=np.round(out["D"][:n]), F=out["F"][:n],
         motor=motor[:n], motor_raw=motor_raw, motor_hz=hz[:n], vbat=np.full(n, 3.8 * spec.cells),
-        rc=np.zeros((n, 4)), debug=dbg[:n], mode_mask=mode,
+        rc=np.column_stack([out["rc"][:n], np.zeros(n)]), debug=dbg[:n], mode_mask=mode,
     )

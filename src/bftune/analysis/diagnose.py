@@ -5,9 +5,9 @@ measured evidence and pointers to likely causes and knobs. The agent decides wha
 Findings are heuristics on flight data only (no model), so they also work on logs without
 chirps and on quads whose plant could not be identified.
 
-Scales come from the log itself, not from a 5": frequency bands scale with the hover motor frequency (prop size
-sets motor speed and, with it, the control bandwidth; the ratios reproduce the bands first tuned on a 5" at ~170 Hz),
-throttle bands with the hover throttle, stick thresholds with the pilot's own moves. Severity only ranks findings
+Scales come from the log itself, not from a 5": frequency bands scale with the control bandwidth measured in the log
+(profile.control_scale; the ratios reproduce the bands first tuned on a 5" crossing over near 19 Hz), throttle bands
+with the hover throttle, stick thresholds with the pilot's own moves. Severity only ranks findings
 for attention; its thresholds are heuristics from a few quads. Judge the evidence, and compare logs of this quad.
 """
 
@@ -19,7 +19,7 @@ import numpy as np
 
 from ..flight import AXES, BOX_ANGLE, BOX_HORIZON, Flight, motor_saturated
 from ..sysid.chirp import find_chirps
-from .profile import hover, scaled_band
+from .profile import control_scale, hover, scaled_band
 
 
 @dataclass
@@ -181,7 +181,9 @@ def oscillation(fl: Flight) -> list[Finding]:
     f = np.fft.rfftfreq(n, 1 / fl.fs)
     w = np.hanning(n)
     thr_h, hz_h = hover(fl)
-    f_lo, f_hi = scaled_band(hz_h, 0.085, 1.2, fl.fs, (15.0, 200.0))  # 15-200 Hz on a 5" at ~170 Hz
+    fc, _ = control_scale(fl)
+    # from the crossover region up to the motor fundamental (15-200 Hz on a 5")
+    f_lo, f_hi = scaled_band(fc, 0.8, max(10.0, 1.2 * (hz_h or 0) / fc), fl.fs, (15.0, 200.0))
     m = (f >= f_lo) & (f <= min(f_hi, fl.fs / 2 - 10))
     lf = np.log(f[m])
     lo_t, hi_t = max(0.02, thr_h - 0.04), thr_h + 0.35 * (1 - thr_h)  # 0.2 / 0.5 on a 5" hovering at 0.24
@@ -211,11 +213,11 @@ def oscillation(fl: Flight) -> list[Finding]:
             if label.startswith("high"):
                 causes.append("TPA insufficient (high throttle)")
             extra = ""
-            if hz_h and fr > 0.6 * hz_h:  # far above any crossover: not the loop's sensitivity peak
+            if fr > 5 * fc:  # far above the crossover: not the loop's sensitivity peak
                 ev["above_control_band"] = True
                 causes = ["a motor line not fully notched (RPM filter Q/weights/harmonics, telemetry)",
                           "vibration or a frame resonance (prop balance, bent shaft, soft mount, loose part)"]
-                extra = f"; far above the control band (hover motor ~{hz_h:.0f} Hz): not the loop's sensitivity peak"
+                extra = f"; far above the control band (~{fc:.0f} Hz): not the loop's sensitivity peak"
                 selb = fl.mode(0) & (fl.throttle >= lo) & (fl.throttle < hi)
                 if fl.motor_hz is not None and fl.motor_hz.size and selb.sum() > fl.fs:
                     mhz = float(np.median(fl.motor_hz[selb].mean(axis=1)))
@@ -286,8 +288,8 @@ def propwash(fl: Flight) -> list[Finding]:
     ok = _acro_mask(fl)
     thr = fl.throttle
     dthr = np.gradient(thr) * fl.fs
-    thr_h, hz_h = hover(fl)
-    b_lo, b_hi = scaled_band(hz_h, 0.088, 0.47, fl.fs, (15.0, 80.0))  # 15-80 Hz on a 5" at ~170 Hz
+    thr_h, _ = hover(fl)
+    b_lo, b_hi = scaled_band(control_scale(fl)[0], 0.8, 4.2, fl.fs, (15.0, 80.0))  # 15-80 Hz on a 5" (fc ~19 Hz)
     sos = butter(2, [b_lo, b_hi], "bandpass", fs=fl.fs, output="sos")
     e = fl.setpoint[:, :2] - fl.gyro[:, :2]
     eb = np.zeros_like(e)
@@ -376,8 +378,7 @@ def throttle_punch(fl: Flight) -> list[Finding]:
 
     ok = _acro_mask(fl)
     dthr = np.gradient(fl.throttle) * fl.fs
-    _, hz_h = hover(fl)
-    lp = scaled_band(hz_h, 0.06, 0.06, fl.fs, (10.0, 10.0))[1]  # attitude drift band (I-term job): 10 Hz on a 5"
+    lp = scaled_band(control_scale(fl)[0], 0.53, 0.53, fl.fs, (10.0, 10.0))[1]  # drift band (I-term job): 10 Hz on a 5"
     sos = butter(2, lp, "lowpass", fs=fl.fs, output="sos")
     e = fl.setpoint[:, :2] - fl.gyro[:, :2]
     el = np.zeros_like(e)
@@ -432,8 +433,7 @@ def heat_risk(fl: Flight) -> list[Finding]:
         return []
     from scipy.signal import butter, sosfiltfilt
 
-    _, hz_h = hover(fl)
-    fc = scaled_band(hz_h, 0.4, 0.4, fl.fs, (70.0, 70.0))[1]  # above the control band: 70 Hz on a 5"
+    fc = scaled_band(control_scale(fl)[0], 3.7, 3.7, fl.fs, (70.0, 70.0))[1]  # above the control band: 70 Hz on a 5"
     sos = butter(2, fc, "highpass", fs=fl.fs, output="sos")
     hp = sosfiltfilt(sos, fl.motor, axis=0)[armed]
     rms = float(np.sqrt(np.mean(hp[20:-20] ** 2)) * 100)

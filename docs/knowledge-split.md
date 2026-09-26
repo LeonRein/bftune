@@ -32,12 +32,12 @@ Rules that follow:
 
 | item | before | now |
 |---|---|---|
-| Frequency bands in `diagnose` (resonance search 15-200 Hz, propwash 15-80 Hz, I-term band 10 Hz, motor-noise band = 15-sample moving average) | 5" numbers; the motor-noise band even depended on the log rate | scale with the hover motor frequency measured in the log (ratios reproduce the 5" bands); fixed-Hz high-pass for motor noise |
+| Frequency bands in `diagnose` (resonance search 15-200 Hz, propwash 15-80 Hz, I-term band 10 Hz, motor-noise band = 15-sample moving average) | 5" numbers; the motor-noise band even depended on the log rate | scale with the control bandwidth measured in the log (setpoint → gyro phase; ratios reproduce the 5" bands). Motor speed was tried first: right for 3.5"-10", 3.5× too high for a whoop, whose bandwidth is set by delay and motor lag |
 | Throttle bands (0.2 / 0.5, chop < 0.25, calm 0.25-0.5, part throttle < 0.75) | fixed | relative to the hover throttle measured in the log |
 | Bounce-back trigger (300 deg/s) and severity (40/100 deg/s) | fixed | the pilot's own fast moves; rebound as % of the move |
 | Motor saturation (raw DShot ≥ 2046) | wrong with `motor_output_limit` < 100 or non-DShot | the motorOutput range × `motor_output_limit` (mixer.c) |
 | Motor imbalance and HF motor noise | reported only above 10 % / warned above 3 % | always reported; imbalance severity kept as a hint, motor noise without severity (compare within the quad) |
-| Noise model's motion/noise boundary (70 Hz) | fixed: counts a whoop's control motion as noise | 0.4 × hover motor frequency (70 Hz on a 5") |
+| Noise model's motion/noise boundary (70 Hz) | fixed for every quad | 3.7 × the measured control bandwidth (70 Hz on a 5", ~40 Hz on a 10") |
 | "Mid" design case at 50 % throttle | fixed | p90 of the throttle the pilot uses (≥ hover + 0.1), a settable target |
 | Robust variants (+10 % / −12 % gain, +0.3 ms) | fixed for every quad | from the gain spread between chirp rounds, never narrower than the convention; can be widened, not narrowed |
 | Step tests (300 deg/s in 50 ms, snap 0.6 × max rate in 30 ms, RC link 250 Hz) | fixed; the flick was faster than almost anything the 5" pilot flew | the pilot's typical and fast moves measured in the log; the link rate from the header or the log |

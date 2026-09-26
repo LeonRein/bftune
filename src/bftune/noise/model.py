@@ -37,14 +37,12 @@ MOTION_HZ = 70.0  # fallback: flight motion lives below this, noise above it (a 
 
 
 def motion_hz_for(fl: Flight) -> float:
-    """Boundary between flight motion and noise for this quad: 0.4 x the hover motor frequency (70 Hz on a 5" at
-    ~175 Hz; a whoop's control band reaches far higher, a 10"'s ends far lower), within the log's usable band."""
-    from ..analysis.profile import hover
+    """Boundary between flight motion and noise for this quad: 3.7 x its control bandwidth measured in the log
+    (70 Hz on a 5" crossing over near 19 Hz; lower on a 10"), within the log's usable band."""
+    from ..analysis.profile import control_scale
 
-    _, hz = hover(fl)
-    if not hz:
-        return MOTION_HZ
-    return float(np.clip(0.4 * hz, 30.0, 0.35 * fl.fs))
+    fc, _ = control_scale(fl)
+    return float(np.clip(3.7 * fc, 25.0, 0.35 * fl.fs))
 
 
 @dataclass

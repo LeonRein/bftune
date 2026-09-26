@@ -90,26 +90,67 @@ def rx_rate(fl: Flight) -> tuple[float | None, str]:
     return min(est, fl.fs), "estimated from rcCommand updates (a lower bound if the log rate is below the link rate)"
 
 
+REF_FC_HZ = 19.0  # the 5" the diagnose bands were first tuned on crossed over near 19 Hz
+
+
+def control_scale(fl: Flight) -> tuple[float, str]:
+    """The quad's control bandwidth (~ its hover crossover), the scale of every control-band quantity (propwash band,
+    resonance search, I-term band, where "noise" starts). Measured from the log: the frequency where the setpoint ->
+    gyro response lags 90 deg, / 1.25 (that ratio held on a 3.5", a 5" and a whoop twin). Falls back to 0.11 x the hover
+    motor frequency (right for 3.5"-10", too high for whoops), then to a 5"'s 19 Hz. Cached on the flight."""
+    if "control_scale" in fl.extras:
+        return fl.extras["control_scale"]
+    from .logstep import step_windows
+
+    est = []
+    n = int(2 * fl.fs)
+    for ax in (0, 1):
+        starts = step_windows(fl, ax)
+        if len(starts) < 5:
+            continue
+        w, f = np.hanning(n), np.fft.rfftfreq(n, 1 / fl.fs)
+        sxx, sxy = 0.0, 0.0
+        for s in starts:
+            x, y = fl.setpoint[s : s + n, ax], fl.gyro_unfilt[s : s + n, ax]
+            X, Y = np.fft.rfft((x - x.mean()) * w), np.fft.rfft((y - y.mean()) * w)
+            sxx, sxy = sxx + np.abs(X) ** 2, sxy + np.conj(X) * Y
+        ph = np.unwrap(np.angle(sxy / np.maximum(sxx, 1e-12)))
+        m = (f > 1) & (f < 0.4 * fl.fs)
+        k = np.flatnonzero(m & (ph < -np.pi / 2))
+        if k.size:
+            est.append(float(f[k[0]]) / 1.25)
+    if est:
+        res = (float(np.mean(est)), "measured from the log (setpoint -> gyro phase)")
+    else:
+        _, hz = hover(fl)
+        res = (0.11 * hz, "from the hover motor frequency (no stick activity to measure)") if hz \
+            else (REF_FC_HZ, "convention (a 5\")")
+    fl.extras["control_scale"] = res
+    return res
+
+
 def flight_profile(fl: Flight) -> dict:
     thr_h, hz_h = hover(fl)
+    fc, fc_src = control_scale(fl)
     armed = fl.mode(0)
     thr = fl.throttle[armed] if armed.any() else fl.throttle
     rx, rx_src = rx_rate(fl)
     return {
         "hover_throttle": round(thr_h, 3),
         "hover_motor_hz": None if hz_h is None else round(hz_h, 1),
+        "control_bandwidth_hz": round(fc, 1), "control_bandwidth_source": fc_src,
         "throttle_pct": {str(q): round(float(np.percentile(thr, q)), 3) for q in (50, 75, 90, 99)} if thr.size else {},
         "stick_moves": {AXES[a]: m for a in range(3) if (m := stick_moves(fl, a)) is not None},
         "rx_rate_hz": rx, "rx_rate_source": rx_src,
     }
 
 
-def scaled_band(hover_motor_hz: float | None, lo_ratio: float, hi_ratio: float, fs: float,
+def scaled_band(scale_hz: float | None, lo_ratio: float, hi_ratio: float, fs: float,
                 fallback: tuple[float, float]) -> tuple[float, float]:
-    """A frequency band that scales with the hover motor frequency (ratios chosen so a 5" at ~170 Hz gets the
-    band that was tuned on it); the fallback is used when the log has no rpm telemetry."""
-    if not hover_motor_hz:
+    """A frequency band as multiples of a scale (the control bandwidth; ratios chosen so a 5" gets the band that
+    was tuned on it), within the log's usable band; the fallback when there is no scale."""
+    if not scale_hz:
         lo, hi = fallback
     else:
-        lo, hi = lo_ratio * hover_motor_hz, hi_ratio * hover_motor_hz
+        lo, hi = lo_ratio * scale_hz, hi_ratio * scale_hz
     return max(1.0, lo), min(hi, 0.45 * fs)

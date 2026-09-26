@@ -12,8 +12,8 @@ with `bftune plot LOG --window T0:T1` (findings give `worst_at_s`). The model (`
 tells you what a knob would do. The pilot tells you what matters.
 
 Frequencies below are *this quad's*: the sensitivity peak is where `assess` reports `ms_hz`, and
-diagnose scales its bands with the hover motor frequency (a 10" lives several times lower than a
-whoop). Thresholds here are the model's targets for this quad (`bftune targets`), not fixed numbers.
+diagnose scales its bands with the control bandwidth it measures in the log (`brief` →
+`flight_profile.control_bandwidth_hz`; a 10" lives at about half a 5"'s). Thresholds here are the model's targets for this quad (`bftune targets`), not fixed numbers.
 
 ## Pilot symptoms
 

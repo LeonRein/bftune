@@ -270,12 +270,14 @@ class Workbench:
                                "dip_pct": round(r["undershoot_pct"], 1)}
         return out
 
-    def model_step(self, tune: Tune, axis: int) -> dict | None:
+    def model_step(self, tune: Tune, axis: int, relax_i: bool = False) -> dict | None:
         """The step response "as flown" for any tune: the model (at the hover operating point) replays the pilot's
         logged setpoint - recorded after RC smoothing (blackbox.c: pidGetPreviousSetpoint) - through FF and the loop,
         and the same windows and Wiener estimator as the measurement turn it into a step. For the flown tune it
         is directly comparable with the measured step (estimator bias cancels); for a candidate it predicts what
-        the next log will show, with the pilot's real stick moves (analysis.logstep)."""
+        the next log will show, with the pilot's real stick moves (analysis.logstep). The I-term stays in: iterm_relax
+        only holds it during fast stick changes, and over whole flight windows it acts (on synthetic twins with known
+        truth, dropping it predicted 0 % overshoot where the twin showed 25-40 %)."""
         from .analysis.logstep import step_estimate
         from .analysis.loop import reference_fr
 
@@ -291,7 +293,7 @@ class Workbench:
         f = np.fft.rfftfreq(n, 1.0 / rp["fs"])
         f[0] = 1e-6
         T, H_sp, _ = reference_fr(tune, axis, self._plant_for(axis, tune), op, f, self.idn.dt, self.src.loop_hz,
-                                  self.rx_hz, self.idn.time_scale)
+                                  self.rx_hz, self.idn.time_scale, relax_i=relax_i)
         y = np.fft.irfft(T / H_sp * np.fft.rfft(sp - sp.mean()), n) + sp.mean()
         return step_estimate(sp, y, rp["starts"][axis], rp["fs"])
 

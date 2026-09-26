@@ -120,7 +120,8 @@ Load the knowledge skills when you need them. They are not preloaded:
 
 - `bftune diagnose LOG [OTHER_LOGS...] -v` works on any log, with or without chirps. It finds
   resonances in the tracking error, propwash, bounce-back, saturation, motor imbalance, desyncs
-  and motor noise. Its bands scale with this quad (hover motor frequency and throttle), and its
+  and motor noise. Its bands scale with this quad (control bandwidth measured in the log, hover
+  throttle), and its
   severity only ranks findings for attention: judge the evidence numbers, and compare them with
   the other logs of this quad.
 - **Look at the flights yourself.** You can read images, so use them to see what numbers hide:
