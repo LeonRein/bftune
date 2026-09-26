@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0
+From reviewing a real session on six logs of one quad:
+- **Dumps that belong to another tune.** When a dump contradicts the log header on tuning settings, the model now
+  uses the log's own settings (what flew), so the chain checks and identification stay valid. The dump becomes
+  "the tune on the quad now": candidates start from it, `assess --with-current` shows it as `on_quad`, and the delivered
+  CLI and revert block are relative to it. `inspect`, `analyze` and `brief` warn about the mismatch.
+- New `bftune tunes LOG... [--dump D]`: groups logs by the tune they flew (headers only, instant), lists the
+  differences, and says whether a dump matches any log.
+- `bftune candidate --set 'key=value # reason'` (repeatable) creates variants without shell editing; candidate files
+  now include every flight-behaviour setting.
+- Tune skill: look at the logs first (`tunes`, `inspect`), then **ask before the heavy work** whenever it is unclear
+  which tune is on the quad, there is no matching dump, motor temperatures of a reference tune are unknown, or the
+  pilot's priorities are unknown. Clear rules for the role of each log (model, noise reference, evidence).
+
 ## 0.4.0
 - **Full feature coverage.** The agent must now consider every Betaflight setting group that shapes flight behaviour
   (RPM filter, notches, gyro/D-term filters, PIDs, D-max, feedforward and its shaping, RC smoothing, TPA incl. low-TPA,

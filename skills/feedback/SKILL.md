@@ -17,7 +17,8 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob, Grep
    - better or worse than the previous tune, and whether they changed props, battery or anything else.
 
    Quote them in `history.md`.
-3. **New log of the flown tune?**
+3. **New log of the flown tune?** First run `bftune tunes NEW_LOG [OLDER_LOGS] --dump NEW_DUMP` to make sure the log really
+   flew the delivered tune (pilots tweak things between flights).
    - `bftune diagnose NEW_LOG PREVIOUS_LOG -v` and `bftune errspec NEW_LOG PREVIOUS_LOG` compare the
      flights stratum by stratum. Only large differences (> 3 dB, clearly different findings) count,
      because flying styles differ between flights.

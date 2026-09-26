@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from .io.bbl import Log, decode
-from .io.dump import Config, config_from_headers, load_dump, merge
+from .io.dump import Config, config_from_headers, load_dump, reconcile
 
 AXES = ("roll", "pitch", "yaw")
 
@@ -92,16 +92,23 @@ def load_flight(bbl_path: str | Path, dump_path: str | Path | None = None, log_i
         with open(bbl_path, "rb") as fh:
             fl = pickle.load(fh)
         if dump_path:
-            cfg = merge(load_dump(str(dump_path)), fl.cfg)
-            fl.cfg = cfg
+            fl.cfg = reconcile(load_dump(str(dump_path)), fl.cfg, tuning_keys())
         return fl
     logs = decode(str(bbl_path))
     if log_index is None:
         log_index = int(np.argmax([lg.main.shape[0] for lg in logs]))
     log = logs[log_index]
     hdr_cfg = config_from_headers(log)
-    cfg = merge(load_dump(str(dump_path)) if dump_path else None, hdr_cfg)
+    cfg = reconcile(load_dump(str(dump_path)) if dump_path else None, hdr_cfg, tuning_keys())
     return flight_from_log(log, cfg)
+
+
+def tuning_keys() -> set[str]:
+    """Settings that shape flight behaviour (model inputs and everything the agent may tune)."""
+    from .coverage import FEATURES
+    from .model.params import DEFAULTS
+
+    return set(DEFAULTS) | {k for f in FEATURES for k in f.keys}
 
 
 def flight_from_log(log: Log, cfg: Config) -> Flight:

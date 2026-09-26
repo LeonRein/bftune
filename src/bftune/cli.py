@@ -41,9 +41,9 @@ def _wb(a):
 
 
 def cmd_inspect(a) -> int:
-    from .flight import AXES, flight_from_log, load_flight
+    from .flight import AXES, flight_from_log, load_flight, tuning_keys
     from .io.bbl import decode
-    from .io.dump import config_from_headers, load_dump, merge
+    from .io.dump import config_from_headers, load_dump, reconcile
     from .pipeline import sanity_warnings
     from .sysid.chirp import find_chirps
 
@@ -64,7 +64,7 @@ def cmd_inspect(a) -> int:
     logs = decode(a.log)
     print(f"{a.log}: {len(logs)} log session(s)")
     for lg in logs:
-        cfg = merge(load_dump(a.dump) if a.dump else None, config_from_headers(lg))
+        cfg = reconcile(load_dump(a.dump) if a.dump else None, config_from_headers(lg), tuning_keys())
         fl = flight_from_log(lg, cfg)
         print(f"\n[{lg.index}] {fl.n} frames, {fl.t[-1]:.1f} s, rate {fl.fs:.0f} Hz (loop {fl.loop_hz:.0f} Hz / {fl.log_ratio}),"
               f" firmware {cfg.firmware_version}, craft '{cfg.craft_name}', corrupt frames {lg.stats['corrupt']}")
@@ -74,6 +74,10 @@ def cmd_inspect(a) -> int:
         for r in find_chirps(fl):
             print(f"    chirp {AXES[r.axis]:5s} t={fl.t[r.start]:6.1f}s {r.f_start:.1f}->{r.f_end:.0f} Hz thr {r.throttle:.2f}"
                   f"{' (angle/horizon)' if r.level_mode else ''}{' (reconstructed)' if r.reconstructed else ''}")
+        if cfg.mismatch:
+            print(f"    warning: the dump does not belong to this log: {len(cfg.mismatch)} tuning settings differ "
+                  f"(e.g. {', '.join(f'{k} {h}->{d}' for k, h, d in cfg.mismatch[:4])}). The model uses the log's own "
+                  "settings; the dump is treated as the tune on the quad now.")
         for w in sanity_warnings(fl, None):
             print("    warning:", w)
     return 0
@@ -113,10 +117,24 @@ def cmd_safe(a) -> int:
 
 
 def cmd_candidate(a) -> int:
+    from .emit.cli import changed_keys
+    from .workbench import parse_candidate
+
     wb = _wb(a)
-    tune, reasons = wb.load(a.base) if a.base else (wb.logged, {})
+    tune, reasons = wb.load(a.base) if a.base else (wb.on_quad.copy(), {})
+    for kv in a.set or []:
+        body, _, why = kv.partition("#")
+        if "=" not in body:
+            raise SystemExit(f"candidate: --set expects KEY=VALUE[#reason], got {kv!r}")
+        k, v = (x.strip() for x in body.split("=", 1))
+        if not v:
+            raise SystemExit(f"candidate: empty value for {k!r}")
+        tune, r = parse_candidate(tune, f"set {k} = {v}" + (f"  # {why.strip()}" if why.strip() else ""))
+        reasons.update(r)
     p = wb.write_candidate(Path(a.file), tune, reasons)
-    print(f"wrote {p} (logged tune; edit values and add '# reason' comments)")
+    ch = changed_keys(wb.on_quad, tune)
+    start = Path(a.base).name if a.base else "the tune on the quad" if wb.on_quad is not wb.logged else "the logged tune"
+    print(f"wrote {p}: {start}" + (f" + changes: {', '.join(f'{k}={tune.values[k]}' for k in ch)}" if ch else ""))
     return 0
 
 
@@ -127,6 +145,8 @@ def cmd_assess(a) -> int:
     res = {}
     if a.with_current:
         res["current"] = wb.assess(wb.logged, steps=not a.fast)
+        if wb.on_quad is not wb.logged:
+            res["on_quad"] = wb.assess(wb.on_quad, steps=not a.fast)
     if a.with_safe:
         seen = []
         for name, t in wb.an.safe:
@@ -221,8 +241,16 @@ def cmd_coverage(a) -> int:
 
     wb = _wb(a)
     cand = wb.load(a.file)[0] if a.file else None
-    rows = coverage(wb.logged, cand)
+    rows = coverage(wb.on_quad, cand)
     print(json.dumps(rows, indent=1) if a.json else format_coverage(rows, cand is not None))
+    return 0
+
+
+def cmd_tunes(a) -> int:
+    from .tunes import format_tunes, group_tunes
+
+    res = group_tunes(a.logs, a.dump)
+    print(json.dumps(res, indent=1) if a.json else format_tunes(res))
     return 0
 
 
@@ -391,6 +419,12 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_coverage)
 
+    s = sub.add_parser("tunes", help="group logs by the tune they flew (headers only, instant); check a dump against them")
+    s.add_argument("logs", nargs="+")
+    s.add_argument("--dump", help="CLI dump/diff to match against the logs' tunes")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_tunes)
+
     s = sub.add_parser("errspec", help="free-flight tracking-error spectrum of one or more logs (pilot cross-check)")
     s.add_argument("logs", nargs="+")
     s.set_defaults(fn=cmd_errspec)
@@ -401,10 +435,12 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--cli", action="append")
     s.set_defaults(fn=cmd_safe)
 
-    s = sub.add_parser("candidate", help="write an editable candidate tune file (starts from the logged tune)")
+    s = sub.add_parser("candidate", help="write a candidate tune file (starts from the tune on the quad; --set for variants)")
     _wb_args(s)
     s.add_argument("file")
-    s.add_argument("--base", help="start from another candidate file instead of the logged tune")
+    s.add_argument("--base", help="start from another candidate file instead of the tune on the quad")
+    s.add_argument("--set", action="append", metavar="KEY=VALUE[#reason]",
+                   help="change a setting (repeatable); e.g. --set 'dterm_lpf2_type=PT3 # steeper filter'")
     s.set_defaults(fn=cmd_candidate)
 
     s = sub.add_parser("assess", aliases=["evaluate"], help="verdict, margins, step and noise metrics for candidates")

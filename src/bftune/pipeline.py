@@ -43,6 +43,7 @@ class Analysis:
     summary: FlightSummary | None = None
     safe: list = field(default_factory=list)  # [(name, Tune)] tunes of this quad that flew with cool motors
     diagnosis: list = field(default_factory=list)  # findings from analysis.diagnose
+    quad_tune: Tune | None = None  # tune on the quad now, when the dump belongs to a different tune than the log
 
     def flight(self) -> Flight:
         return load_flight(self.log_path, self.dump_path, self.log_index)
@@ -130,6 +131,13 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
                   fl.cfg.craft_name,
                   fl.cfg.firmware_version, val, warns)
     an.summary = summarize(fl)
+    if fl.cfg.mismatch:
+        an.quad_tune = Tune.from_config(fl.cfg.quad)
+        ex = ", ".join(f"{k} {h}->{d}" for k, h, d in fl.cfg.mismatch[:5])
+        an.warnings.append(
+            f"the dump does not belong to this log: {len(fl.cfg.mismatch)} tuning settings differ ({ex}, ...). The model "
+            "uses the log's own settings (what flew); the dump is the tune on the quad now: candidates start from it and "
+            "the CLI/revert are relative to it. Assess it with `assess --with-current` (entry 'on_quad').")
     from .analysis.diagnose import diagnose
 
     an.diagnosis = diagnose(fl)
@@ -171,6 +179,7 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
             "hover_motor_hz": round(float(np.mean([np.mean(ai.op.motor_hz) for ai in idn.axes.values()])), 1),
         },
         "safe_tunes": [n for n, _ in an.safe],
+        "dump_mismatch": [{"setting": k, "log": h, "dump": d} for k, h, d in fl.cfg.mismatch],
         "diagnosis": an.diagnosis,
         "notes": idn.notes,
         "warnings": an.warnings,

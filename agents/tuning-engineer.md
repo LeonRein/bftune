@@ -29,7 +29,8 @@ a question in about a second, so explore instead of guessing.
      several layouts, `ff`, `noise`);
    - record the numbers.
 
-   Change one idea at a time, then combine the winners and re-check the interactions (filters ↔ D ↔
+   Make each variant with `bftune candidate -o A vN.txt --base cand.txt --set 'key=value # reason'`,
+   never by shell-appending to files. Change one idea at a time, then combine the winners and re-check the interactions (filters ↔ D ↔
    noise, TPA ↔ full-throttle P).
 4. **Keep a worklog** (append to the worklog path you were given): each decision, the numbers
    behind it, and the rejected alternatives with the reason. Put a `# reason` comment on every

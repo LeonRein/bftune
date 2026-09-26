@@ -28,6 +28,10 @@ class Config:
     board: str | None = None
     craft_name: str | None = None
     source: str = ""
+    # set when a dump contradicts the log header on tuning settings: the model uses the header (what flew),
+    # `quad` holds the dump-based config (the tune on the quad now), `mismatch` the (key, log, dump) triples
+    mismatch: list = field(default_factory=list)
+    quad: Config | None = None
 
     def get(self, key: str, default: str | None = None) -> str | None:
         return self.values.get(key, default)
@@ -174,6 +178,34 @@ def config_from_headers(log: Log) -> Config:
     cfg.craft_name = h.get("Craft name")
     cfg.board = h.get("Board information")
     return cfg
+
+
+def reconcile(dump: Config | None, header: Config, tuning_keys: set[str]) -> Config:
+    """Merge dump and header, keeping the model honest when the dump belongs to another tune.
+
+    A dump taken after the flight (or of a later tune) differs from the log header in tuning
+    settings. The identification and noise model must use what actually flew, so the header wins
+    for those keys; the dump-based config is kept as `quad` (the tune on the quad now).
+    """
+    merged = merge(dump, header)
+    if dump is None:
+        return merged
+
+    def norm(v):
+        return str(v).replace(" ", "").upper()
+
+    mism = [(k, header.values[k], dump.values[k]) for k in sorted(tuning_keys)
+            if k in header.values and k in dump.values and norm(header.values[k]) != norm(dump.values[k])]
+    if not mism:
+        return merged
+    model = merge(dump, header)
+    for k in tuning_keys:
+        if k in header.values:
+            model.values[k] = header.values[k]
+    model.source = "header+dump (dump differs from the log: header used for the model)"
+    model.mismatch = mism
+    model.quad = merged
+    return model
 
 
 def merge(dump: Config | None, header: Config) -> Config:

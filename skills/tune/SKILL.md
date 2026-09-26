@@ -30,7 +30,7 @@ Load the knowledge skills when you need them. They are not preloaded:
 - `bftune:feedback` (after a test flight) and `bftune:review` (checking someone else's tune) are the
   other entry points; switch to them when the conversation turns that way.
 
-## 1. Understand: the project and the pilot
+## 1. Understand: the project, the logs, the pilot
 
 1. **Find or create the quad's project folder.** It is the memory across flights.
    - If the user named a folder containing `quad.md`, use it and read `quad.md` and `history.md` first.
@@ -38,34 +38,48 @@ Load the knowledge skills when you need them. They are not preloaded:
      the current directory). Copy the logs and dump into `<dir>/logs/` as `NN-<original name>`
      (`01-LOG00007.BFL`, `01-dump.txt`), where NN is the iteration the log belongs to (`00-` for
      logs of tunes from before the first bftune iteration).
-2. **Interview briefly.** Ask only what the files cannot tell you, in one message:
-   - flying style and priorities (freestyle, race, cinematic, long range; locked-in vs smooth);
-   - what they dislike about the current tune (propwash, bounce-back, wobble, hot motors, mushy);
-   - how warm the motors got with each tune that has a log;
-   - props, weight, and anything changed since the log;
-   - for every other log of *the same quad*, what that tune felt like.
+2. **Look at what you have (seconds, before anything heavy):**
+   - `bftune tunes LOG1 LOG2 ... [--dump DUMP]` groups the logs by the tune they flew (headers
+     only, instant). It shows how the tunes differ and whether the dump matches one of them. If
+     it matches none, the quad now runs a tune that no log contains.
+   - `bftune inspect LOG [--dump DUMP]` shows sessions, chirp runs, debug mode, log rate, gaps and
+     warnings. If there are several sessions, pick the one with chirps or the longest flight, and
+     say which one you used.
+3. **Ask before the heavy work.** Put the questions in one message and wait for the answers. You
+   *must* ask when any of these holds:
+   - the logs contain more than one tune and it is unclear which one is on the quad now;
+   - there is no dump, or the dump matches no log. Ask for a fresh `diff all`: it gives the
+     profile index, the slider state and the tune actually on the quad.
+   - you need a tune as a noise reference but don't know how warm its motors got;
+   - the pilot's style and priorities are unknown.
+
+   If the user asks "do you need anything else?", answer that first; it is an invitation to ask.
+   Also ask, in the same message, what they dislike about each tune, and about props, weight and
+   anything changed since the logs.
 
    Record the answers in `quad.md` (facts) and `history.md` (impressions, quoted).
 
-   If the pilot can't answer now, don't stall. Use defaults and list them as assumptions in your
-   answer and in `history.md`:
+   Proceed on assumptions only if the pilot said they can't answer. Use these defaults and list
+   them in your answer and in `history.md`:
    - style: freestyle;
    - motors "cool", "fine" or unknown: the logged tune is the noise reference (the default budget
      never forces a cut below it); "warm": pass `--noise-budget 0.85` to the workbench commands,
      which forces about 15 % less motor noise; "hot": 0.7-0.8, and fix the heat first;
-   - the logged tune is what is on the quad, and props and weight are unchanged.
-   - Other logs of the same quad: a log *with* chirps gets its own `analyze`. An older tune without
-     chirps is evidence, not a model: use it as `--safe-log` (if its motors stayed cool or only
-     slightly warm) and compare it with `diagnose`/`errspec`. Its header holds its full tune, so it
-     needs no dump.
-3. **Look at what you have:** `bftune inspect LOG [--dump DUMP]` shows sessions, chirp runs,
-   debug mode, log rate and warnings.
-   - The dump is optional: the settings also come from the log header.
-   - Without a dump, the active PID profile and the `simplified_*` slider state are unknown. The CLI
-     then asks the pilot to select their profile, and the revert must come from their `diff all`
-     backup. Ask for a dump if you can.
-   - If there are several sessions, pick the one with chirps or the longest flight, and say which
-     one you used.
+   - the most recent log's tune is what is on the quad, and props and weight are unchanged.
+4. **Choose the role of each log:**
+   - The model comes from a log **with chirps**. With several, prefer the cleanest: no gaps or
+     corrupt frames, and the best validation. Cross-check the others against it; a disagreement
+     is a finding to explain.
+   - A log whose tune flew with cool or slightly warm motors is a noise reference (`--safe-log`).
+     Its header holds its full tune, so it needs no dump.
+   - Logs without chirps are evidence: `diagnose` and `errspec`.
+   - **A dump belongs to the tune on the quad now, not necessarily to the log.** Pass it to
+     `analyze` anyway. If it differs from the log's tune, the model uses the log's own settings
+     (what flew), and the dump becomes "the tune on the quad now": candidates start from it,
+     `assess --with-current` shows it as `on_quad`, and the delivered CLI and revert are relative
+     to it. The `analyze` warning and the `brief` summary say when this happens.
+   - Without a dump, the active PID profile and the slider state are unknown. The CLI then asks
+     the pilot to select their profile, and the revert must come from their `diff all` backup.
 
 ## 2. Diagnose
 
@@ -102,7 +116,8 @@ believe it. Examples:
   `sweep tpa_rate` and `sweep tpa_breakpoint`.
 
 Work in a candidate file (`bftune candidate -o A <dir>/tunes/NN/cand.txt`) and put a `# reason` on
-every changed line. Try alternatives in separate files and compare them with `assess A f1 f2 --with-current`.
+every changed line. Make variants with `bftune candidate -o A v2.txt --base cand.txt --set 'key=value # reason'`
+(repeat `--set`), never by appending to files with shell redirection. Try alternatives in separate files and compare them with `assess A f1 f2 --with-current`.
 Rejected ideas and their numbers go into the worklog. They are part of the answer.
 
 For long explorations (many sweeps, several layouts), you may delegate to the `tuning-engineer`

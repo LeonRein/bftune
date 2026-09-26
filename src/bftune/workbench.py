@@ -91,10 +91,11 @@ def parse_candidate(base: Tune, text: str) -> tuple[Tune, dict[str, str]]:
         k, v, why = m.group(1), m.group(2).strip(), (m.group(3) or "").strip()
         apply_setting(t, k, v)
         if why:
-            reasons[k] = why
-            if k in _LPF_OFF and v.upper() == "OFF":  # the shortcut changes the cutoffs: carry the reason
+            if k in _LPF_OFF and v.upper() == "OFF":  # the shortcut changes the cutoffs: the reason goes there
                 for kk in _LPF_OFF[k]:
                     reasons[kk] = why
+            else:
+                reasons[k] = why
     return t, reasons
 
 
@@ -124,19 +125,37 @@ class Workbench:
     def logged(self) -> Tune:
         return self.an.tune
 
+    @property
+    def on_quad(self) -> Tune:
+        """The tune on the quad now: the dump's, when it differs from the logged tune; else the logged tune.
+        Candidates start from it and the delivered CLI/revert are relative to it. The model and the
+        'no worse than flown' references stay with the logged tune (what the log measured)."""
+        return getattr(self.an, "quad_tune", None) or self.an.tune
+
     def load(self, path: str | Path | None) -> tuple[Tune, dict[str, str]]:
         if path is None:
-            return self.logged.copy(), {}
-        return parse_candidate(self.logged, Path(path).read_text())
+            return self.on_quad.copy(), {}
+        return parse_candidate(self.on_quad, Path(path).read_text())
 
     def write_candidate(self, path: Path, tune: Tune | None = None, reasons: dict | None = None) -> Path:
-        t = tune or self.logged
+        from .coverage import FEATURES
+
+        t = tune or self.on_quad
         lines = [
             f"# bftune candidate for {self.an.craft or 'craft'} (Betaflight {self.an.firmware or '?'})",
             "# Edit values; keep a short reason after '#' for every change (it goes into the report).",
             "# Evaluate:  bftune assess -o OUT this_file   |   emit:  bftune emit -o OUT this_file",
         ]
-        for g, keys in GROUPS.items():
+        if getattr(self.an, "quad_tune", None) is not None:
+            lines.append("# NOTE: starts from the tune on the quad now (the dump), which differs from the logged tune.")
+        groups = dict(GROUPS)
+        listed = {k for g in groups.values() for k in g}
+        groups["Other flight-behaviour settings"] = [k for f in FEATURES for k in f.keys if k not in listed]
+        listed |= set(groups["Other flight-behaviour settings"])
+        extra = [k for k in t.values if k not in listed and str(t.values[k]) != str(self.on_quad.values.get(k))]
+        if extra:
+            groups["Other changed settings"] = extra
+        for g, keys in groups.items():
             lines.append(f"\n# --- {g}")
             for k in keys:
                 if k in t.values:
@@ -396,14 +415,16 @@ class Workbench:
 
         dest = Path(dest) if dest else self.out
         dest.mkdir(parents=True, exist_ok=True)
-        old = self.logged
+        old = self.on_quad
         new = drop_inert_changes(old, tune)
         for k in ("simplified_pids_mode", "simplified_dterm_filter", "simplified_gyro_filter"):
             new.values[k] = "OFF"
         reasons = dict(reasons or {})
         for k in ("simplified_pids_mode", "simplified_dterm_filter", "simplified_gyro_filter"):
             reasons.setdefault(k, "keep explicit values (Configurator sliders would overwrite them)")
-        ass = {"current": self.assess(old), "new": self.assess(new)}
+        ass = {"current": self.assess(self.logged), "new": self.assess(new)}
+        if old is not self.logged:
+            ass["on_quad"] = self.assess(old)
         for name, t in self.an.safe:
             ass[name] = self.assess(t)
         verdict = ass["new"]["verdict"]
@@ -580,10 +601,14 @@ def brief(wb: Workbench) -> dict:
         safe.append({"name": name,
                      "differs": {k: [an.tune.values.get(k), t.values[k]] for k in changed_keys(an.tune, t) if k in keys},
                      "verdict": ass["verdict"], "axes": {ax: _compact_axis(e) for ax, e in ass["axes"].items()}})
+    qa = wb.assess(an.quad_tune, steps=True) if getattr(an, "quad_tune", None) is not None else None
     summary = [f"model: {ident['source']} identification"
                + (f", gain uncertainty ±{(ident['uncertainty']['k_hi'] - 1) * 100:.0f} %" if ident.get("uncertainty") else "")
                + (f"; missing axes {ident['missing_axes']}" if ident["missing_axes"] else ""),
-               f"current tune: {cur['verdict']} ({'relative' if wb.relative_gate else 'absolute'} gate)"]
+               f"logged tune: {cur['verdict']} ({'relative' if wb.relative_gate else 'absolute'} gate)"]
+    if qa is not None:
+        summary.append(f"DUMP DIFFERS FROM THE LOG: the quad now runs another tune ({len(changed_keys(an.tune, an.quad_tune))}"
+                       f" settings differ), verdict {qa['verdict']} on this model; candidates/CLI are relative to it")
     for ax, e in cur["axes"].items():
         h, fu, w = e["hover"], e["full"], e["worst"]
         summary.append(f"{ax}: hover fc {h['fc']} Hz, Ms {h['ms']}@{h.get('ms_hz')} Hz; full PM {fu['pm']}°; "
@@ -610,6 +635,11 @@ def brief(wb: Workbench) -> dict:
             "rx_rate_hz": src.header_int("rc_smoothing_rx_smoothed", 0),
         },
         "current_tune": {k: an.tune.values.get(k) for k in keys if k in an.tune.values},
+        "tune_on_quad": None if getattr(an, "quad_tune", None) is None else {
+            "note": "the dump differs from the logged tune; candidates and the delivered CLI are relative to this",
+            "differs_from_logged": {k: [an.tune.values.get(k), an.quad_tune.values[k]]
+                                    for k in changed_keys(an.tune, an.quad_tune) if k in keys},
+            "assessment": {"verdict": qa["verdict"], "axes": {ax: _compact_axis(e) for ax, e in qa["axes"].items()}}},
         "current_assessment": {"verdict": cur["verdict"], "notes": cur["notes"],
                                "axes": {ax: _compact_axis(e) for ax, e in cur["axes"].items()}},
         "proven_safe_tunes": safe,
