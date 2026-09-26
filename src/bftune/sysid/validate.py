@@ -44,6 +44,8 @@ def closed_loop_check(fl: Flight, tune: Tune, idn: Identification) -> dict[int, 
     relaxed = relaxed_axes(tune)
     for axis, ai in idn.axes.items():
         fr = ai.frf
+        if "r" not in fr.H:  # freestyle identification: setpoint is the instrument itself
+            continue
         T_meas = fr.H["y"] / fr.H["r"]
         C = controller_fr(tune, axis, ai.op, fr.f, idn.dt, fl.loop_hz, include_i=axis not in relaxed,
                           time_scale=idn.time_scale)

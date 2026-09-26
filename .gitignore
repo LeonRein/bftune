@@ -7,3 +7,5 @@ __pycache__/
 /out/
 *.npz
 /logs/
+evals/results/
+evals/*/results/

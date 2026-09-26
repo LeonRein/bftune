@@ -60,6 +60,9 @@ class Identification:
     time_scale: float  # actual/nominal loop period
     notes: list[str] = field(default_factory=list)
     thrust_linear: int = 0  # thrust_linear of the identification tune (plant includes its curve)
+    source: str = "chirp"  # "chirp" (precise) or "freestyle" (stick inputs only, low confidence)
+    # robustness variants used by the optimizer/verdict: gain range and extra delay
+    uncertainty: dict = field(default_factory=lambda: {"k_hi": 1.10, "k_lo": 0.88, "dT": 0.0003})
 
     def summary(self) -> str:
         lines = []
@@ -68,8 +71,10 @@ class Identification:
             ps = ", ".join(f"{k}={v:.4g}" for k, v in p.items())
             lines.append(
                 f"{AXES[a]:5s}: {ai.plant.structure:16s} {ps}  | band {ai.fit_band[0]:.1f}-{ai.fit_band[1]:.1f} Hz"
-                f" | chain check {'OK' if ai.chain.passed else 'FAIL'} (Fg {ai.chain.fg_rms_db:.2f} dB/{ai.chain.fg_rms_deg:.1f}°,"
-                f" D {ai.chain.d_rms_db:.2f} dB/{ai.chain.d_rms_deg:.1f}°)"
+                + (f" | chain check {'OK' if ai.chain.passed else 'FAIL'} (Fg {ai.chain.fg_rms_db:.2f} dB/{ai.chain.fg_rms_deg:.1f}°,"
+                   f" D {ai.chain.d_rms_db:.2f} dB/{ai.chain.d_rms_deg:.1f}°)" if getattr(self, "source", "chirp") == "chirp"
+                   else (f" | gyro-filter check {ai.chain.fg_rms_db:.2f} dB/{ai.chain.fg_rms_deg:.1f}° (stick band)"
+                         if np.isfinite(ai.chain.fg_rms_db) else " | gyro-filter check n/a (stick band too narrow)"))
             )
         if self.motor:
             lines.append(
@@ -109,10 +114,9 @@ def identify(
 ) -> Identification:
     runs = find_chirps(fl)
     if not runs:
-        raise ValueError(
-            "No CHIRP runs found. Record the log with debug_mode = CHIRP and fly the chirp mode "
-            "(see the bf-flight-protocol skill)."
-        )
+        from .freestyle import identify_freestyle
+
+        return identify_freestyle(fl, tune)
     structures = structures or DEFAULT_STRUCTURES
     dt = 1.0 / fl.loop_hz
     time_scale = fl.loop_hz / (fl.fs * fl.log_ratio)

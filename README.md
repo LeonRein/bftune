@@ -1,92 +1,123 @@
-# bftune
+# bftune: an AI tuning engineer for Betaflight quads
 
-**Model-based Betaflight tuning.** Fly a short system-identification flight (Betaflight's
-CHIRP mode), hand bftune the blackbox log and your CLI `dump`, and get a PID / feedforward /
-filter / TPA tune. The tune is optimized on a model of *your* quad and validated against the log,
-with every change explained. It works from 1S tinywhoops to 10" long-range.
+bftune is a [Claude Code](https://claude.com/claude-code) plugin that tunes your FPV quad the way an
+experienced tuning engineer would. It works for everything from 1S tinywhoops to 10" long range.
 
-It is also a Claude Code plugin: a *tuning-engineer* agent and skills run the toolkit, interpret
-the results and write the CLI commands for you.
+1. You give it your blackbox logs and tell it how the quad flies and what you want.
+2. It works out what limits your quad, tests its ideas on a physical model of *your* quad, and
+   hands you CLI commands to paste into Betaflight, with a reason for every change.
+3. After you fly them, you tell it how it went, and it learns from that for the next round.
 
-## How it works
-1. **Decode** the blackbox log with a pure-Python decoder (any number of sessions, corrupt-frame recovery).
-2. **Identify** the rate dynamics of each axis (pidSum → gyro) with the chirp excitation as an
-   instrument variable, so there is no feedback bias. The model structure is motor lag + delay +
-   integrator, with a reaction-torque zero on yaw. Motor dynamics vs. RPM come from eRPM telemetry.
-3. **Validate** in three ways. The exact Betaflight filter chain is checked against the log (gyroADC
-   vs gyroUnfilt, D term). The predicted closed-loop chirp response is compared with the measurement.
-   Freestyle sections are replayed through the model.
-4. **Noise model.** From an aliased 1-2 kHz log, reconstruct the 8 kHz gyro-noise spectrum that
-   explains gyroUnfilt, gyroADC and the D term at once. This predicts motor noise for any filter/D
-   combination.
-5. **Workbench** (`assess`, `sweep`, `suggest`, `ff`, `noise`, `emit`) scores any candidate in about
-   a second, so a tuner or agent can iterate. It optimizes disturbance rejection (propwash, turbulence) under robust stability constraints:
-   phase margin, gain margin, peak sensitivity and delay margin across idle, hover, mid and full
-   throttle, ±10 % actuator gain (battery sag, motor wear), +0.3 ms delay and D-max. Setpoint tracking
-   (attitude hold) is part of the objective. The noise budget comes from tunes proven to fly
-   with cool motors. Filters, TPA, thrust_linear, RPM and dynamic-notch settings are searched from
-   several seeds.
-6. **Rules** for the parts a linear model can't score: feedforward from simulated stick flicks,
-   RC smoothing, dynamic idle and I-term relax.
-7. **Emit** a range-checked CLI block (with a guard against the Configurator's sliders), a revert
-   block, a Markdown report and plots.
+You never run a script. You have a conversation:
 
-Everything is a port of Betaflight 2026.6 source code; see [docs/model.md](docs/model.md).
+> **You:** Tune my 3.5" please. Logs and dump are in ~/fpv/mini/. It feels floaty and propwash is bad.
+>
+> **bftune:** *(reads the logs)* Two questions before I start: how warm were the motors after that
+> pack, and do you mostly fly freestyle or race? …
+>
+> **bftune:** Your propwash comes from a sensitivity peak at 46 Hz. The D-term filter adds so much
+> lag that P and D push the loop close to its limit there. Your log shows the same 46 Hz bump in
+> the tracking error. Here is the plan: a steeper D-term filter at a lower cutoff, which lets D stay
+> where it is with less lag; P −10 %; dynamic idle on, for authority in dives. The model
+> predicts the peak drops from 3.3 to 1.9, with motor noise at 0.85× your current (cool) tune.
+> Here's the CLI, the revert block and what to test first…
+
+## Why an agent and not a script?
+Every quad and every log is different. A fixed pipeline can only apply the same recipe each time.
+bftune gives Claude a set of precise instruments and the engineering knowledge to use them:
+- **A model of your quad**, identified from the log: rate dynamics per axis, motor lag vs rpm,
+  delay, and an alias-aware noise model reconstructed from a 1-2 kHz log. It is a faithful port of
+  Betaflight 2026.6's controller and filters.
+- **Fast what-if tools**: any tune is scored in about a second (stability margins at idle, hover and
+  full throttle, propwash sensitivity, stick latency and overshoot, motor noise and heat risk).
+- **Diagnosis from flight data**: resonances, propwash, bounce-back, desyncs, motor imbalance,
+  saturation.
+- **Knowledge skills**: symptom → cause → fix, loop shaping, filters and noise, craft classes, and how
+  far to trust the model against the pilot.
+
+The agent decides what to investigate. It forms hypotheses ("the propwash comes from filter
+lag"), tests them on the model, checks them against the flight data and your impressions, and
+explains its choices. Every tune must still pass a fixed safety gate before it is handed out.
 
 ## Install
-```bash
-uv tool install git+https://github.com/LeonRein/bftune      # or: pipx install git+https://...
-bftune --help
-```
-Claude Code plugin:
+You need [Claude Code](https://claude.com/claude-code) and [uv](https://docs.astral.sh/uv/)
+(uv runs the bundled Python tools; nothing else to install). In Claude Code:
 ```
 /plugin marketplace add LeonRein/bftune
 /plugin install bftune@bftune
 ```
 
-## Quick start
-```bash
-bftune inspect  LOG.BFL --dump dump.txt
-bftune analyze  LOG.BFL --dump dump.txt -o out/ --safe-log OLD_TUNE.BFL   # once, ~10-20 s
-bftune candidate -o out/ cand.txt            # editable tune file (starts as the logged tune)
-bftune assess   -o out/ cand.txt --with-current --with-safe   # verdict + margins + step + noise (~1 s)
-bftune noise    -o out/ cand.txt             # filter decisions: noise per band, non-RPM peaks
-bftune sweep    -o out/ cand.txt d_roll 20:50:5              # tradeoff table for one setting
-bftune suggest  -o out/ cand.txt             # per-axis P/I/D proposal (everything else fixed)
-bftune ff       -o out/ cand.txt --axis roll # feedforward: lag vs overshoot
-bftune emit     -o out/ cand.txt             # CLI + revert block + report (exit 2 if the verdict FAILs)
-bftune optimize -o out_copy/                 # optional automatic baseline (slow)
-bftune synth 5inch -o twin.pkl --truth       # synthetic test flight with known truth
+## Use it
+Start Claude Code in any folder and either type `/bftune:tune` or just ask, e.g. "tune my quad,
+the logs are in ./logs". Other entry points:
+
+| you want to… | say or type |
+|---|---|
+| get a tune from logs | `/bftune:tune` or "tune my quad" |
+| report back after flying a tune | `/bftune:feedback` or "I flew the new tune, propwash is better but …" |
+| know how to record a good log | `/bftune:flight-plan` or "how do I fly the test log?" |
+| check a tune before flying it | `/bftune:review` or "is this diff safe on my quad?" |
+
+### What to bring
+- **A blackbox log** of the quad (`.BFL`/`.BBL`) and its **CLI `dump`** (or `diff all`).
+- **Best: a log with chirps.** Betaflight 2026.6's CHIRP mode makes the quad sweep each axis while
+  you hover, which gives a precise model. `/bftune:flight-plan` tells you exactly how to record it,
+  for your craft and logging hardware.
+- **Without chirps** it still works from normal flying, but with lower confidence, so it only makes
+  small, targeted changes and asks for a chirp flight next.
+- **Logs of other tunes of the same quad**, with how warm the motors got and how they felt. These are
+  gold: they calibrate the model against reality.
+
+A 1 kHz blackbox rate is enough. Faster is better, but only without gaps in the log.
+
+### What the agent asks you
+How you fly (freestyle, race, cinematic), what you dislike about the current tune, how warm the
+motors got, and anything that changed since the log (props, battery, weight). It asks only what
+the logs can't tell it.
+
+### What you get
+- A **CLI block** to paste into the Configurator's CLI tab. It turns off the simplified-tuning
+  sliders (so the Configurator doesn't overwrite the values later), sets the tune and saves.
+- A **table of every change** with the reason, and what should feel different.
+- A **revert block** to go back to your current tune.
+- A **first-flight checklist** and what to log next.
+- A **report** (HTML/Markdown) with the predicted margins, latency and noise.
+
+### Your quad's project folder
+bftune keeps a folder per quad as its memory across flights:
 ```
-The intended loop is **hypothesis → edit `cand.txt` → assess/sweep → adjust**, driven by a person or by
-the `tuning-engineer` agent following the step-by-step procedure in
-[skills/bf-tune/SKILL.md](skills/bf-tune/SKILL.md). The numerics are scripts; the decisions stay
-explainable. Every emitted tune must pass the same deterministic **verdict** (PASS/FAIL of every
-robustness constraint). `analysis.pkl` and synthetic `.pkl` files are Python pickles, so only load
-files you created yourself.
-
-## Recording the flight (summary)
-Firmware 2026.6+ with `USE_CHIRP`, a CHIRP mode switch and `set debug_mode = CHIRP`. Hover in
-ANGLE mode and run one 20 s chirp per axis (switch on, wait, off; the axis advances roll → pitch → yaw),
-ideally 2-3 rounds. Then fly 1-2 minutes of normal acro including punch-outs. A 1 kHz blackbox rate
-is enough; faster is better. See [skills/bf-flight-protocol/SKILL.md](skills/bf-flight-protocol/SKILL.md).
-
-## Status and limits
-- Supports Betaflight 2026.6 (SVF filters, chirp, `d_max` semantics). Older firmware needs model
-  changes (biquad filters, d_min).
-- The model is linear around each operating point. Saturation, airmode transitions and anti-gravity
-  are not optimized; they are only guarded by margins.
-- Resonances above the log's Nyquist are inferred, not observed. The noise budget and flight
-  checks cover that.
-- Tested on real logs of a 3.5" 4S quad (two independent tunes, cross-validated) and on synthetic
-  twins of a 65 mm whoop, 3.5", 5" and 10".
-- Validated by cold tests: fresh agents with only this repository tuned the reference quad and audited
-  the firmware port. Their findings are fixed in 0.1.x/0.2.0.
-
-## Development
-```bash
-uv sync && uv run pytest            # add -m "not slow" to skip synthetic end-to-end tests
-uv run python tools/gen_settings_db.py ../betaflight 2026.6 > src/bftune/data/settings_2026.6.json
+mini35/
+  quad.md          hardware, your style and priorities, lessons learned
+  history.md       every iteration: what was flown, what you felt, what changed and why
+  logs/            your logs and dumps
+  analysis/        the model of each log
+  tunes/01-2026-09-26/   delivered CLI, revert block, report, the engineer's worklog
 ```
+Point the agent at that folder next time (`/bftune:feedback mini35/`) and it continues where it
+left off.
 
-License: GPL-3.0-or-later (it ports Betaflight's GPL-3.0 algorithms).
+## Safety
+- Every delivered tune passes a deterministic gate. It needs phase margin, gain margin and peak
+  sensitivity at idle, hover, mid and full throttle, including worse-than-measured variants (more
+  gain, more delay, D-max). Motor noise must stay below a tune that has already flown cool on your quad.
+- Without a chirp, the gate becomes relative: no worse than the tune you flew.
+- It stops and tells you when the problem is hardware (desyncs, a bent prop, a weak motor,
+  saturation at hover) rather than tuning.
+- It's a model. First flights are still first flights: hover, land, feel the motors, then push.
+  Every tune comes with a revert block.
+
+## Limits
+- Betaflight **2026.6.x** only (the controller and filter model is version-specific).
+- The model is linear around each operating point. Saturation, airmode, I-term and anti-gravity
+  are handled by judgement and margins, not by the model.
+- Noise above the log's Nyquist frequency is inferred, not observed.
+- Tested on real logs of a 3.5" 4S quad (several tunes, cross-validated) and on synthetic twins of a
+  65 mm whoop, 3.5", 5" and 10" with known truth.
+
+## For developers
+The instruments are a Python package (`src/bftune`) with a CLI the agent calls. See
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the CLI reference, the tests and the plugin evals,
+[docs/model.md](docs/model.md) for the firmware model with source references, and
+[docs/python-api.md](docs/python-api.md) for the API.
+
+License: GPL-3.0-or-later (bftune ports Betaflight's GPL-3.0 algorithms).

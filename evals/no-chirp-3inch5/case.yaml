@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: no-chirp-3inch5
+context:
+  scaffold_script: fixture.sh

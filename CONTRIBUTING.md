@@ -7,3 +7,6 @@
   version switch where the firmware math changed.
 - Real logs are welcome as test fixtures only with the owner's permission (logs can contain GPS
   and craft names).
+- Keep the split between the layers (see `docs/DEVELOPMENT.md`): numerics go into the package as a
+  command or API function; engineering judgement goes into a skill. When you change agent
+  behaviour (skills, agent), run the evals: `claude plugin eval . --scaffold`.

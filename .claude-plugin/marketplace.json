@@ -5,7 +5,7 @@
     {
       "name": "bftune",
       "source": "./",
-      "description": "Betaflight tuning engineer: system identification from chirp logs, alias-aware noise model, robust PID/filter optimization, CLI output."
+      "description": "AI tuning engineer for Betaflight quads: conversational tuning from blackbox logs with an identified model of your quad, diagnosis, verified CLI output and per-quad memory across flights."
     }
   ]
 }

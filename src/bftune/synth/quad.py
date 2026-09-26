@@ -53,7 +53,7 @@ class CraftSpec:
     tune: dict = field(default_factory=dict)  # CLI overrides for the synthetic "current" tune
 
     gamma: float = 0.75  # steady-state motor curve: hz = idle + (max-idle)*cmd^gamma
-    chirp_f1: float = 200.0  # per-class chirp end frequency (bf-flight-protocol table)
+    chirp_f1: float = 200.0  # per-class chirp end frequency (skills/flight-plan table)
     chirp_amp: tuple[float, float, float] = (230.0, 230.0, 180.0)
 
     def tau(self, hz: float) -> float:
@@ -192,7 +192,7 @@ def simulate(
     """Hover, chirp runs at hover throttle, then freestyle (stick steps, punch-outs, chops).
 
     Returns a Flight sampled like a blackbox log. Chirp end frequency and amplitude default to
-    the craft class (see skills/bf-flight-protocol).
+    the craft class (see skills/flight-plan).
     """
     rng = np.random.default_rng(seed)
     f1 = f1 or spec.chirp_f1

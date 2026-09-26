@@ -42,6 +42,7 @@ class Analysis:
     extra: dict = field(default_factory=dict)
     summary: FlightSummary | None = None
     safe: list = field(default_factory=list)  # [(name, Tune)] tunes of this quad that flew with cool motors
+    diagnosis: list = field(default_factory=list)  # findings from analysis.diagnose
 
     def flight(self) -> Flight:
         return load_flight(self.log_path, self.dump_path, self.log_index)
@@ -74,14 +75,19 @@ def sanity_warnings(fl: Flight, idn: Identification | None) -> list[str]:
     if sat > 0.02:
         w.append(f"motors at 100% for {100*sat:.1f}% of the log (saturation): check props/weight/motor_output_limit")
     if idn is not None:
+        chirp = getattr(idn, "source", "chirp") == "chirp"
         for a, ai in idn.axes.items():
             if not ai.chain.passed:
                 w.append(f"{AXES[a]}: filter-chain check failed — the firmware model may not match this firmware")
-            if ai.coherent_to_hz < 25:
+            if chirp and ai.coherent_to_hz < 25:
                 w.append(f"{AXES[a]}: coherent band only up to {ai.coherent_to_hz:.0f} Hz — use more chirp amplitude")
+        if not chirp:
+            w.append("no chirp in this log: plant from stick inputs only (gain ±40 %, delay from priors); the verdict "
+                     "becomes relative (no worse than the flown tune). Recommend a chirp flight for the next iteration")
         for a in range(3):
             if a not in idn.axes:
-                w.append(f"no chirp for {AXES[a]}: that axis cannot be optimized")
+                w.append(f"no model for {AXES[a]}" + (" (no chirp on that axis)" if chirp else " (too little stick activity)")
+                         + ": that axis cannot be assessed")
     return w
 
 
@@ -115,6 +121,9 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
                   fl.cfg.craft_name,
                   fl.cfg.firmware_version, val, warns)
     an.summary = summarize(fl)
+    from .analysis.diagnose import diagnose
+
+    an.diagnosis = diagnose(fl)
     for pth in safe_logs or []:
         an.safe.append((f"safe:{Path(pth).name}", safe_tune_from_log(pth)))
     for pth in safe_cli or []:
@@ -132,6 +141,7 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
         "loop_hz": fl.loop_hz,
         "log_rate_hz": fl.fs,
         "time_scale": idn.time_scale,
+        "identification_source": getattr(idn, "source", "chirp"),
         "chirp_runs": [{"axis": AXES[r.axis], "t0": float(fl.t[r.start]), "f": [r.f_start, r.f_end], "throttle": r.throttle,
                         "level_mode": r.level_mode, "reconstructed": r.reconstructed} for r in idn.runs],
         "plants": {AXES[a]: _plant_dict(ai) for a, ai in idn.axes.items()},
@@ -152,6 +162,7 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
             "hover_motor_hz": round(float(np.mean([np.mean(ai.op.motor_hz) for ai in idn.axes.values()])), 1),
         },
         "safe_tunes": [n for n, _ in an.safe],
+        "diagnosis": an.diagnosis,
         "notes": idn.notes,
         "warnings": an.warnings,
     }
@@ -212,7 +223,7 @@ def optimize(out: Path, style: str = "freestyle", passes: int = 2, maxiter: int 
     """Automatic baseline: multi-start global search + rules, emitted through the workbench.
 
     This is a second opinion / reproducible baseline. The recommended workflow is the
-    agent-driven procedure in skills/bf-tune (assess, sweep, suggest, ff, emit).
+    agent-driven procedure in skills/tune (assess, sweep, suggest, ff, emit).
     """
     from .optimize import rules
     from .optimize.search import FILTER_KEYS, Goals, multi_start_search

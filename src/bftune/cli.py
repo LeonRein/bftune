@@ -1,8 +1,11 @@
 """bftune command-line interface.
 
-Workflow (see skills/bf-tune/SKILL.md):
+These are the tools the bftune agent uses (skills/tune). Users normally don't call them directly.
+
     bftune inspect LOG --dump DUMP
+    bftune diagnose LOG [LOG2 ...] [-v]                              # problem finder (no chirp needed)
     bftune analyze LOG --dump DUMP -o OUT [--safe-log OTHER.BFL]    # slow step, once (~10 s)
+    bftune brief   -o OUT                                            # situation report (JSON)
     bftune candidate -o OUT cand.txt                                 # editable tune file
     bftune noise   -o OUT [cand.txt]                                 # filter decisions
     bftune assess  -o OUT cand.txt [other.txt ...]                   # verdict + metrics (~1 s)
@@ -159,6 +162,41 @@ def cmd_suggest(a) -> int:
     return 0
 
 
+def cmd_diagnose(a) -> int:
+    from .analysis.diagnose import diagnose, format_findings
+    from .flight import load_flight
+
+    for path in a.logs:
+        fl = load_flight(path, a.dump, a.index)
+        res = diagnose(fl)
+        if a.json:
+            print(json.dumps({"log": path, "findings": res}, indent=1, default=float))
+        else:
+            print(f"== {path} ({fl.t[-1]:.0f} s)")
+            print(format_findings(res, verbose=a.verbose))
+    return 0
+
+
+def cmd_brief(a) -> int:
+    from .workbench import brief
+
+    b = brief(_wb(a))
+    Path(a.out, "brief.json").write_text(json.dumps(b, indent=1, default=float))
+    print(json.dumps(b, indent=1, default=float))
+    return 0
+
+
+def cmd_project(a) -> int:
+    from .project import init_project, next_tune_dir
+
+    if a.action == "init":
+        made = init_project(Path(a.path), a.name)
+        print(f"project at {Path(a.path).resolve()}: " + (", ".join(p.name for p in made) + " created" if made else "exists"))
+    else:
+        print(next_tune_dir(Path(a.path)))
+    return 0
+
+
 def cmd_errspec(a) -> int:
     from .analysis.errspec import error_spectrum
     from .flight import load_flight
@@ -217,8 +255,9 @@ def cmd_noise(a) -> int:
 def cmd_emit(a) -> int:
     wb = _wb(a)
     tune, reasons = wb.load(a.file)
-    res = wb.emit(tune, reasons, extra={"method": "engineering procedure (bf-tune skill)"}, log=_log)
-    print((Path(a.out) / "tune_cli.txt").read_text())
+    dest = Path(a.to) if a.to else Path(a.out)
+    res = wb.emit(tune, reasons, extra={"method": "bftune agent (tune skill)"}, log=_log, dest=dest)
+    print((dest / "tune_cli.txt").read_text())
     return 0 if res["verdict"] == "PASS" else 2
 
 
@@ -237,10 +276,21 @@ def cmd_all(a) -> int:
 
 def cmd_synth(a) -> int:
     import pickle
+    from dataclasses import replace
 
-    from .synth.quad import CRAFTS, simulate
+    from .synth.quad import CRAFTS, default_tune, simulate
 
-    fl = simulate(CRAFTS[a.craft], chirp_s=a.chirp_s, hover_s=a.hover_s, seed=a.seed)
+    spec = CRAFTS[a.craft]
+    if a.frame_mode_hz is not None:
+        spec = replace(spec, frame_mode_hz=a.frame_mode_hz, frame_mode_amp=a.frame_mode_amp)
+    tune = None
+    if a.set:
+        tune = default_tune(spec)
+        for kv in a.set:
+            k, v = kv.split("=", 1)
+            tune.set(k.strip(), v.strip())
+    fl = simulate(spec, tune=tune, chirp_axes=() if a.no_chirp else (0, 1, 2), chirp_repeats=a.repeats,
+                  chirp_s=a.chirp_s, hover_s=a.hover_s, freestyle_s=a.freestyle_s, seed=a.seed)
     with open(a.output, "wb") as fh:
         pickle.dump(fl, fh)
     print(f"wrote synthetic flight {a.output} ({fl.n} frames)")
@@ -287,6 +337,24 @@ def main(argv: list[str] | None = None) -> int:
             s.add_argument("--passes", type=int, default=2)
             s.add_argument("--maxiter", type=int, default=25)
         s.set_defaults(fn=fn)
+
+    s = sub.add_parser("diagnose", help="automatic problem finder on one or more logs (works without chirps)")
+    s.add_argument("logs", nargs="+")
+    s.add_argument("--dump", help="CLI dump (optional)")
+    s.add_argument("--index", type=int, default=None, help="log session index (default: longest)")
+    s.add_argument("-v", "--verbose", action="store_true", help="show evidence, causes and knobs")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_diagnose)
+
+    s = sub.add_parser("brief", help="compact JSON situation report for the agent (writes OUT/brief.json)")
+    _wb_args(s)
+    s.set_defaults(fn=cmd_brief)
+
+    s = sub.add_parser("project", help="per-quad project folder: init | next-tune-dir")
+    s.add_argument("action", choices=["init", "next-tune-dir"])
+    s.add_argument("path")
+    s.add_argument("--name")
+    s.set_defaults(fn=cmd_project)
 
     s = sub.add_parser("errspec", help="free-flight tracking-error spectrum of one or more logs (pilot cross-check)")
     s.add_argument("logs", nargs="+")
@@ -345,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("emit", help="final CLI + revert block + report for a candidate (exit 2 on FAIL)")
     _wb_args(s)
     s.add_argument("file")
+    s.add_argument("--to", help="write the deliverables here instead of the analysis directory (e.g. the tune folder)")
     s.set_defaults(fn=cmd_emit)
 
     s = sub.add_parser("optimize", help="optional automatic baseline (slow global search, 10-60 min)")
@@ -359,6 +428,12 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--truth", action="store_true", help="also print the true plant parameters")
     s.add_argument("--chirp-s", type=float, default=12.0)
     s.add_argument("--hover-s", type=float, default=4.0)
+    s.add_argument("--freestyle-s", type=float, default=12.0)
+    s.add_argument("--repeats", type=int, default=1, help="chirp rounds over all axes")
+    s.add_argument("--no-chirp", action="store_true", help="freestyle only (tests the no-chirp path)")
+    s.add_argument("--set", action="append", metavar="KEY=VALUE", help="override the twin's flown tune")
+    s.add_argument("--frame-mode-hz", type=float, help="plant a structural resonance (noise) at this frequency")
+    s.add_argument("--frame-mode-amp", type=float, default=2.0)
     s.add_argument("--seed", type=int, default=0)
     s.set_defaults(fn=cmd_synth)
 

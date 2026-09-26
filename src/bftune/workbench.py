@@ -180,8 +180,11 @@ class Workbench:
         total, obj, pen, worst, nr, rows = prob.evaluate(tune.i(f"p_{ax}"), tune.i(f"i_{ax}"), d, dm, detail=True)
         byc = {r["case"]: r for r in rows}
         pick = lambda c, keys: {k: (None if byc.get(c, {}).get(k) is None else round(float(byc[c][k]), 2)) for k in keys}  # noqa: E731
+        viol = violations(rows, self.goals, nr if prob.noise_Q is not None and self.noise_ref else None)
+        if self.relative_gate:
+            viol = self._relative_violations(axis, rows, viol)
         res = {
-            "violations": violations(rows, self.goals, nr if prob.noise_Q is not None and self.noise_ref else None),
+            "violations": viol,
             "objective_db": round(float(obj), 3),
             "hover": pick("hover/d", ("fc", "pm", "gm_db", "ms", "dm_ms", "bw_s", "ms_hz")),
             "idle": pick("idle/d", ("fc", "pm", "gm_db", "ms", "bw_s", "ms_hz")),
@@ -195,6 +198,41 @@ class Workbench:
         if steps:
             res["step"] = self.step_metrics(tune, axis)
         return res
+
+    @property
+    def relative_gate(self) -> bool:
+        """No chirp -> the plant gain is only known to about ±40 %: absolute margins are not trustworthy.
+        The gate then becomes 'no worse than the tune that flew' (case by case, same model)."""
+        return getattr(self.idn, "source", "chirp") != "chirp"
+
+    def _relative_violations(self, axis: int, rows: list[dict], absolute: list[str]) -> list[str]:
+        cache = self.__dict__.setdefault("_logged_rows", {})
+        if axis not in cache:
+            t = self.logged
+            ax = AXES[axis]
+            d = t.i(f"d_{ax}")
+            prob = self.axis_problem(t, axis)
+            cache[axis] = {r["case"]: r for r in prob.evaluate(t.i(f"p_{ax}"), t.i(f"i_{ax}"), d,
+                                                               t.i(f"d_max_{ax}") / d if d > 0 else 1.0, detail=True)[5]}
+        ref = cache[axis]
+        failing = {v.split(":")[0] for v in absolute}
+        out = [v for v in absolute if v.startswith("motor noise")]
+        for r in rows:
+            c = r["case"]
+            if c not in failing or c not in ref:
+                continue
+            q = ref[c]
+            bad = []
+            pm, pm0 = r.get("pm_eff", r["pm"]), q.get("pm_eff", q["pm"])
+            if pm < pm0 - 2.0:
+                bad.append(f"PM {pm:.0f}° < flown {pm0:.0f}°")
+            if r["gm_db"] < q["gm_db"] - 0.5:
+                bad.append(f"GM {r['gm_db']:.1f} < flown {q['gm_db']:.1f} dB")
+            if r["ms"] > q["ms"] * 1.05 + 0.02:
+                bad.append(f"Ms {r['ms']:.2f} > flown {q['ms']:.2f}")
+            if bad:
+                out.append(f"{c}: " + ", ".join(bad) + " (relative gate: no chirp)")
+        return out
 
     def assess(self, tune: Tune, steps: bool = True, axes=None) -> dict:
         from .emit.cli import changed_keys
@@ -217,7 +255,10 @@ class Workbench:
                              f"({e['coherent_to_hz']:.0f} Hz): margins rely on the model extrapolation")
         problems = validate(tune, [k for k in changed_keys(self.logged, tune) if k in DEFAULTS or True])
         verdict = "PASS" if not any(e["violations"] for e in per.values()) and not problems else "FAIL"
-        return {"verdict": verdict, "axes": per, "notes": notes, "range_problems": problems,
+        if self.relative_gate:
+            notes.insert(0, "NO CHIRP: plant gain uncertain (±40 %). Verdict = no worse than the flown tune in every "
+                            "failing case (relative gate), not the absolute design margins. Keep changes small; fly a chirp.")
+        return {"verdict": verdict, "gate": "relative" if self.relative_gate else "absolute", "axes": per, "notes": notes, "range_problems": problems,
                 "hf_filtering": {"gyro": round(g, 4), "gyro_dterm": round(dchain, 5), "safe_max": [round(x, 5) for x in self.hf_ref]}}
 
     # ----------------------------------------------------------------- exploration
@@ -297,13 +338,16 @@ class Workbench:
         return rep
 
     # ----------------------------------------------------------------- deliverable
-    def emit(self, tune: Tune, reasons: dict[str, str] | None = None, extra: dict | None = None, log=print) -> dict:
+    def emit(self, tune: Tune, reasons: dict[str, str] | None = None, extra: dict | None = None, log=print,
+             dest: Path | None = None) -> dict:
         from .emit.cli import cli_block, diff_table
         from .noise.model import predict as predict_noise
         from .optimize.rules import rx_rate_hz
         from .report import plots as P
         from .report.markdown import write_report
 
+        dest = Path(dest) if dest else self.out
+        dest.mkdir(parents=True, exist_ok=True)
         old = self.logged
         new = drop_inert_changes(old, tune)
         for k in ("simplified_pids_mode", "simplified_dterm_filter", "simplified_gyro_filter"):
@@ -326,30 +370,30 @@ class Workbench:
         profile = self.src.cfg.active_profile if "dump" in self.src.cfg.source else None
         apply_txt, revert_txt, problems = cli_block(old, new, profile=profile, craft=self.an.craft,
                                                     firmware=self.an.firmware, extra_comment=comment)
-        (self.out / "tune_cli.txt").write_text(apply_txt)
-        (self.out / "revert_cli.txt").write_text(revert_txt)
+        (dest / "tune_cli.txt").write_text(apply_txt)
+        (dest / "revert_cli.txt").write_text(revert_txt)
         missing = [k for k, _, _, r in diff_table(old, new, reasons) if not r]
         rows = diff_table(old, new, reasons)
-        plots = {"loop": P.loop_compare(self.idn, self.src.loop_hz, old, new, self.out / "loop_compare.png").name}
-        sp, _ = P.step_compare(self.idn, self.src.loop_hz, rx_rate_hz(self.src), old, new, self.out / "step_compare.png")
+        plots = {"loop": P.loop_compare(self.idn, self.src.loop_hz, old, new, dest / "loop_compare.png").name}
+        sp, _ = P.step_compare(self.idn, self.src.loop_hz, rx_rate_hz(self.src), old, new, dest / "step_compare.png")
         plots["step"] = sp.name
         if self.an.nm.bands:
             sc = lambda t: np.array([[thrust_linear_slope(t.i("thrust_linear"), b.throttle)] for b in self.an.nm.bands])  # noqa: E731
             plots["noise"] = P.noise_compare(self.an.nm, predict_noise(self.an.nm, old).motor_rms * sc(old),
                                              predict_noise(self.an.nm, new).motor_rms * sc(new), self.noise_ref,
-                                             self.out / "noise_compare.png").name
+                                             dest / "noise_compare.png").name
         result = {
             "verdict": verdict, "violations": viol, "noise_model": bool(self.an.nm.bands), "style": self.style,
             "changes": [{"setting": k, "old": o, "new": n, "reason": r} for k, o, n, r in rows],
             "unexplained_changes": missing, "assessment": ass, "problems": problems, "plots": plots,
             **(extra or {}),
         }
-        (self.out / "tune.json").write_text(json.dumps(result, indent=1, default=float))
-        write_report(self.out, self.an, result, apply_txt, revert_txt)
+        (dest / "tune.json").write_text(json.dumps(result, indent=1, default=float))
+        write_report(dest, self.an, result, apply_txt, revert_txt)
         log(format_assessment({"new": ass["new"]}))
         if missing:
             log("changes without a reason: " + ", ".join(missing))
-        log(f"wrote {self.out/'tune_cli.txt'}, {self.out/'revert_cli.txt'}, {self.out/'report.md'}")
+        log(f"wrote {dest/'tune_cli.txt'}, {dest/'revert_cli.txt'}, {dest/'report.md'}")
         return result
 
 
@@ -423,3 +467,73 @@ def parse_values(spec: str) -> list:
         x = x.strip()
         out.append(int(x) if re.fullmatch(r"-?\d+", x) else x)
     return out
+
+
+def _compact_axis(e: dict) -> dict:
+    out = {k: e[k] for k in ("hover", "idle", "full", "worst", "worst_case", "noise_vs_safe") if k in e}
+    v = e.get("violations", [])
+    out["violations"] = v[:6] + ([f"... {len(v) - 6} more (run assess)"] if len(v) > 6 else [])
+    if "step" in e:
+        out["step"] = e["step"]
+    return out
+
+
+def brief(wb: Workbench) -> dict:
+    """Everything the agent needs to start reasoning, in one compact JSON (see skills/toolbox)."""
+    from dataclasses import asdict
+
+    from . import __version__
+    from .emit.cli import changed_keys
+
+    an, idn, src = wb.an, wb.idn, wb.src
+    keys = [k for g in GROUPS.values() for k in g]
+    cur = wb.assess(wb.logged, steps=True)
+    ident = {
+        "source": getattr(idn, "source", "chirp"),
+        "uncertainty": getattr(idn, "uncertainty", None),
+        "axes": {AXES[a]: {"structure": ai.plant.structure,
+                           "params": {k: round(float(v), 5) for k, v in ai.plant.params.items()},
+                           "fit_band_hz": [round(x, 1) for x in ai.fit_band],
+                           "coherent_to_hz": round(ai.coherent_to_hz, 1),
+                           "chain_check_passed": bool(ai.chain.passed),
+                           "op": {"throttle": round(ai.op.throttle, 3), "motor_hz": round(float(np.mean(ai.op.motor_hz)), 1),
+                                  "vbat": round(ai.op.vbat, 2)}}
+                 for a, ai in idn.axes.items()},
+        "missing_axes": [AXES[a] for a in range(3) if a not in idn.axes],
+        "motor_tau_ms": None if idn.motor is None else
+        {str(int(h)): round(float(idn.motor.tau_at(h) * 1000), 1) for h in idn.motor.bins_hz},
+        "validation": an.validation,
+        "notes": idn.notes,
+    }
+    noise = wb.noise_report() if an.nm.bands else None
+    safe = []
+    for name, t in an.safe:
+        ass = wb.assess(t, steps=True)
+        safe.append({"name": name,
+                     "differs": {k: [an.tune.values.get(k), t.values[k]] for k in changed_keys(an.tune, t) if k in keys},
+                     "verdict": ass["verdict"], "axes": {ax: _compact_axis(e) for ax, e in ass["axes"].items()}})
+    return {
+        "bftune": __version__,
+        "craft": an.craft, "firmware": an.firmware, "loop_hz": src.loop_hz, "log_rate_hz": src.fs,
+        "style": wb.style,
+        "goals": {k: v for k, v in asdict(wb.goals).items() if k in (
+            "ms_max", "ms_max_robust", "pm_min", "pm_min_robust", "gm_min_db", "gm_min_robust_db", "noise_budget",
+            "d_over_p", "i_over_p")},
+        "identification": ident,
+        "flight": {
+            "natural_idle_rpm_p20": round(src.idle_hz(20) * 60),
+            "hover_motor_hz": round(float(np.mean([np.mean(ai.op.motor_hz) for ai in idn.axes.values()])), 1)
+            if idn.axes else None,
+            "rx_rate_hz": src.header_int("rc_smoothing_rx_smoothed", 0),
+        },
+        "current_tune": {k: an.tune.values.get(k) for k in keys if k in an.tune.values},
+        "current_assessment": {"verdict": cur["verdict"], "notes": cur["notes"],
+                               "axes": {ax: _compact_axis(e) for ax, e in cur["axes"].items()}},
+        "proven_safe_tunes": safe,
+        "noise": None if noise is None else {
+            "persistent_non_rpm_peaks_hz": noise["persistent_peaks_hz"],
+            "bands": [{k: b[k] for k in ("throttle", "motor_hz", "measured_dterm_rms", "fit_error") if k in b}
+                      for b in noise["bands"]]},
+        "diagnosis": getattr(an, "diagnosis", []),
+        "warnings": an.warnings,
+    }

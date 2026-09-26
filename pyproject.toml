@@ -1,6 +1,6 @@
 [project]
 name = "bftune"
-version = "0.2.0"
+version = "0.3.0"
 description = "Model-based Betaflight tuning: blackbox chirp system identification, alias-aware noise model and robust PID/filter optimization"
 license = "GPL-3.0-or-later"
 authors = [{ name = "LeonRein" }]

@@ -123,7 +123,8 @@ def build_cases(fl: FlightSummary, idn: Identification, tune: Tune, axis: int, g
                                 label=f"{label}/d{'max' if boost else ''}")
             cases.append(Case(op.label, op, dict(base.params), base.structure, w if boost == 0 else 0.0, False))
             # uncertainty variants (constraint only)
-            for vf, dT, tag in ((1.10, 0.0003, "hiK+delay"), (0.88, 0.0, "loK")):
+            unc = getattr(idn, "uncertainty", None) or {"k_hi": 1.10, "k_lo": 0.88, "dT": 0.0003}
+            for vf, dT, tag in ((unc["k_hi"], unc["dT"], "hiK+delay"), (unc["k_lo"], 0.0, "loK")):
                 p = dict(base.params)
                 p["K"] *= vf
                 p["T"] += dT

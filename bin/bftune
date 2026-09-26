@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+# bftune launcher for the Claude Code plugin: this bin/ directory is on the agent's PATH while the
+# plugin is enabled. Runs the Python package bundled with the plugin through uv (installs the
+# dependencies into a cached environment on first use), or falls back to an installed bftune.
+here="$(cd "$(dirname "$0")/.." && pwd)"
+if command -v uv >/dev/null 2>&1; then
+    exec uv run --quiet --frozen --project "$here" bftune "$@"
+fi
+for py in python3 python; do
+    if command -v "$py" >/dev/null 2>&1 && "$py" -c "import bftune" 2>/dev/null; then
+        exec "$py" -m bftune "$@"
+    fi
+done
+echo "bftune: needs 'uv' (https://docs.astral.sh/uv/) or an installed bftune package (pip install $here)" >&2
+exit 127
