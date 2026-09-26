@@ -77,6 +77,12 @@ sensitivity peak (the crossover moves into the delay region). Then keep d_max = 
 overshoot ≤ 10 % and snap overshoot ≤ 15 % (race 12/20 %, cinematic 3/8 %). On yaw,
 `feedforward_yaw_hold_*` also acts.
 
+`feedforward_boost`, `feedforward_smooth_factor` and `feedforward_averaging` are in the step
+simulation: sweep them with `--steps` and change them on model evidence (lag and overshoot). The
+simulation can't see RC-link jitter, so lower smoothing or averaging raises the risk of a jittery
+centre stick. Say so, and name the fallback. `settle_5pct_ms` is secondary: a longer settle from a
+small undershoot is fine if lag and overshoot improve.
+
 **Mixed styles** (e.g. "freestyle and some racing"): keep the freestyle margin limits (propwash
 matters in both) and use the race limits only for FF overshoot and RC smoothing, where delay is
 what the pilot feels. Say so.
@@ -102,6 +108,5 @@ Check each against the flight data before leaving it alone:
   unless the log shows the idle rpm dropping below the floor in dives.
 
 - `iterm_relax_cutoff`: 15 freestyle, 20 race, 10 cinematic. Lower it against bounce-back.
-- `anti_gravity_gain`, FF jitter/smoothing/averaging: defaults unless the log shows a problem.
 - Always turn `simplified_pids_mode`, `simplified_dterm_filter` and `simplified_gyro_filter` OFF
   when you set explicit values. `emit` does this.

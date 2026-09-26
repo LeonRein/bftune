@@ -10,6 +10,10 @@
 - New `diagnose` findings: `throttle_punch_dip` (anti-gravity evidence) and `pidsum_clipping_<axis>`.
 - Model: `motor_output_limit` scales actuator authority and motor noise; D-max cases and the step simulation only use
   `d_max` when `d_max_gain` or `d_max_advance` can raise D.
+- From the verification run: `sweep` rejects an empty value list; range checks only cover tuning settings (no more
+  walls about debug_mode or motor_output_reordering, and an unchanged tune is no longer checked in full); identical
+  proven-safe tunes are collapsed in `brief` and `assess --with-safe`; I-term relax/integrated yaw are listed as
+  model-testable; skills clarify FF smoothing, the imbalance threshold and pre-bftune log naming.
 - Tunes now carry every setting from the dump/log header, so any of them can be changed with a correct revert value
   (unknown old values are never guessed).
 

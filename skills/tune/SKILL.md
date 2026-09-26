@@ -36,7 +36,8 @@ Load the knowledge skills when you need them. They are not preloaded:
    - If the user named a folder containing `quad.md`, use it and read `quad.md` and `history.md` first.
    - Otherwise create one with `bftune project init <dir> --name "<quad>"` (next to the logs or in
      the current directory). Copy the logs and dump into `<dir>/logs/` as `NN-<original name>`
-     (`01-LOG00007.BFL`, `01-dump.txt`), where NN is the iteration the log belongs to.
+     (`01-LOG00007.BFL`, `01-dump.txt`), where NN is the iteration the log belongs to (`00-` for
+     logs of tunes from before the first bftune iteration).
 2. **Interview briefly.** Ask only what the files cannot tell you, in one message:
    - flying style and priorities (freestyle, race, cinematic, long range; locked-in vs smooth);
    - what they dislike about the current tune (propwash, bounce-back, wobble, hot motors, mushy);
@@ -161,7 +162,7 @@ Hard rules:
   - If the real fix for the main complaint can't pass (e.g. `thrust_linear` or a large P change),
     deliver the partial fix that passes, say plainly what is held back and why, and make the chirp
     flight the headline of the next step.
-- A setting you cannot test on the model (anti-gravity, I-term relax, iterm windup, FF jitter) is
+- A setting you cannot test on the model (anti-gravity, I-term relax cutoff, iterm windup, FF jitter) is
   changed only for a diagnosed reason, and the worklog says so. RC smoothing *is* in the step
   simulation: compare `rc_smoothing_auto_factor` variants with `assess` or `sweep --steps`.
 - Prefer robust, explainable choices over the last 0.1 dB.

@@ -26,7 +26,7 @@ import numpy as np
 
 from .flight import AXES
 from .model.controller import OperatingPoint
-from .model.params import DEFAULTS, Tune, thrust_linear_slope
+from .model.params import Tune, thrust_linear_slope
 from .model.plant import Plant
 from .optimize.search import (
     AxisProblem,
@@ -290,7 +290,7 @@ class Workbench:
             if fc and fc > 0.8 * e["coherent_to_hz"]:
                 notes.append(f"{ax}: hover crossover {fc:.0f} Hz is close to the end of the identified band "
                              f"({e['coherent_to_hz']:.0f} Hz): margins rely on the model extrapolation")
-        problems = validate(tune, [k for k in changed_keys(self.logged, tune) if k in DEFAULTS or True])
+        problems = validate(tune, [k for k in changed_keys(self.logged, tune) if k in tuning_keys()])
         verdict = "PASS" if not any(e["violations"] for e in per.values()) and not problems else "FAIL"
         if self.relative_gate:
             notes.insert(0, "NO CHIRP: plant gain uncertain (±40 %). Verdict = no worse than the flown tune in every "
@@ -523,6 +523,14 @@ def parse_values(spec: str) -> list:
     return out
 
 
+def tuning_keys() -> set[str]:
+    """Settings the agent tunes (range-checked); other differences (debug_mode, resources...) are not its business."""
+    from .coverage import FEATURES
+
+    return {k for g in GROUPS.values() for k in g} | {k for f in FEATURES for k in f.keys} | {
+        "simplified_pids_mode", "simplified_dterm_filter", "simplified_gyro_filter"}
+
+
 def _compact_axis(e: dict) -> dict:
     out = {k: e[k] for k in ("hover", "idle", "full", "worst", "worst_case", "noise_vs_safe") if k in e}
     v = e.get("violations", [])
@@ -561,7 +569,13 @@ def brief(wb: Workbench) -> dict:
     }
     noise = wb.noise_report() if an.nm.bands else None
     safe = []
+    seen: dict[str, str] = {}
     for name, t in an.safe:
+        sig = json.dumps({k: t.values.get(k) for k in sorted(keys)})
+        if sig in seen:  # the same tune logged twice: one entry is enough
+            safe.append({"name": name, "same_tune_as": seen[sig]})
+            continue
+        seen[sig] = name
         ass = wb.assess(t, steps=True)
         safe.append({"name": name,
                      "differs": {k: [an.tune.values.get(k), t.values[k]] for k in changed_keys(an.tune, t) if k in keys},
@@ -575,7 +589,10 @@ def brief(wb: Workbench) -> dict:
         summary.append(f"{ax}: hover fc {h['fc']} Hz, Ms {h['ms']}@{h.get('ms_hz')} Hz; full PM {fu['pm']}°; "
                        f"worst PM {w['pm']}° ({e.get('worst_case', {}).get('pm', '')}); noise {e.get('noise_vs_safe')}x safe")
     for s_ in safe:
-        summary.append(f"proven-safe {s_['name']}: {s_['verdict']}, differs in {len(s_['differs'])} settings")
+        if "same_tune_as" in s_:
+            summary.append(f"proven-safe {s_['name']}: same tune as {s_['same_tune_as']}")
+        else:
+            summary.append(f"proven-safe {s_['name']}: {s_['verdict']}, differs in {len(s_['differs'])} settings")
     summary += [f"finding [{f['severity']}] {f['summary']}" for f in getattr(an, "diagnosis", []) if f["severity"] != "info"]
     return {
         "summary": summary,

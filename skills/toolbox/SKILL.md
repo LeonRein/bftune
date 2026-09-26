@@ -39,6 +39,9 @@ Global flags: `--style freestyle|race|cinematic` and `--noise-budget 0.9`.
 | `bftune emit -o A cand.txt [--to DIR]` | deliverables (`tune_cli.txt`, `revert_cli.txt`, `report.md/html`, `tune.json`, plots); **exit 2 = FAIL** |
 | `bftune optimize -o A_COPY` | slow automatic baseline (10-60 min). Use it only as a second opinion, in a copy of `A` |
 
+Shell: give a sweep all its values in one call (`20:50:5`, `a,b,c`, `x;y` for arrays) instead of a
+shell loop. The Bash tool may not be the user's login shell, so write plain POSIX/bash.
+
 ## Candidate files
 ```
 set p_roll = 42          # hover Ms 2.0 at 44 Hz; noise 0.86x safe

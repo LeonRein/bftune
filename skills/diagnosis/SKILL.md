@@ -31,7 +31,7 @@ candidate causes. `bftune diagnose -v` gives finding ids with evidence. The mode
 | `resonance_<axis>_<band>` | a peak in the tracking-error spectrum, averaged over a throttle band | Compare with `assess` hover/mid `ms_hz`. If they coincide, it is the loop's sensitivity peak (tunable). If not, look for a mechanical resonance (`noise` persistent peaks). |
 | `propwash` | 15-80 Hz error after throttle chops, split into gentle chops and flips/rolls | Compare logs only stratum by stratum. It depends strongly on how hard the pilot flew. |
 | `bounce_back_<axis>` | opposite rebound after fast moves | see the table above |
-| `motor_saturation` / `motor_imbalance` | motors at their limit / uneven motor outputs at hover | Imbalance > 10-15 %: CG, bent prop, weak motor. Fix the hardware first. |
+| `motor_saturation` / `motor_imbalance` | motors at their limit / uneven motor outputs at hover | 10-30 %: usually CG or trim. Tell the pilot the direction the finding reports and continue tuning. Above 30 %, or with a desync: bent prop, weak motor; fix the hardware first. |
 | `possible_desync` | one motor's rpm collapsed while the others ran | Can be a telemetry glitch (one event) or a real desync. Ask about the ESC/motor, and don't raise gains until it is resolved. |
 | `throttle_punch_dip` | low-frequency attitude error while throttle rises fast, sticks centred | `anti_gravity_gain` (and `anti_gravity_p_gain`), I. Fix the CG first if `motor_imbalance` shows up too. |
 | `pidsum_clipping_<axis>` | PID sum at `pidsum_limit(_yaw)` | yaw spin-up or weak yaw: raise the limit only if motors are not saturated. Otherwise lower P/FF. |

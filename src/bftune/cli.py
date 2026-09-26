@@ -128,7 +128,11 @@ def cmd_assess(a) -> int:
     if a.with_current:
         res["current"] = wb.assess(wb.logged, steps=not a.fast)
     if a.with_safe:
+        seen = []
         for name, t in wb.an.safe:
+            if any(t.values == u.values for u in seen):  # the same tune logged twice
+                continue
+            seen.append(t)
             res[name] = wb.assess(t, steps=not a.fast)
     for f in a.files:
         t, _ = wb.load(f)
@@ -142,7 +146,10 @@ def cmd_sweep(a) -> int:
 
     wb = _wb(a)
     base, _ = wb.load(a.file)
-    rows = wb.sweep(base, a.key, parse_values(a.values), steps=a.steps)
+    vals = [v for v in parse_values(a.values) if str(v).strip() != ""]
+    if not vals:
+        raise SystemExit(f"sweep: no values given for {a.key} (got {a.values!r}); e.g. 20:50:5 or 100,120,140")
+    rows = wb.sweep(base, a.key, vals, steps=a.steps)
     print(json.dumps(rows, indent=1, default=float) if a.json else format_sweep(a.key, rows))
     return 0
 

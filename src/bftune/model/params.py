@@ -143,7 +143,7 @@ def validate(tune: Tune, keys: list[str] | None = None, version: str = "2026.6")
     """Return a list of human-readable problems (empty = all values legal)."""
     db = _load_settings_db(version)
     problems = []
-    for k in keys or list(tune.values):
+    for k in list(tune.values) if keys is None else keys:
         v = tune.values[k]
         meta = db.get(k)
         if meta is None:

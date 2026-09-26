@@ -110,7 +110,8 @@ def saturation(fl: Flight) -> list[Finding]:
                         "yaw": ("motors 2+3 work harder (a constant yaw correction: twisted motor, prop mismatch)",
                                 "motors 1+4 work harder (a constant yaw correction: twisted motor, prop mismatch)")}
                 k = max(trim, key=lambda q: abs(trim[q]))
-                where = f"; mostly {k}: {desc[k][0 if trim[k] > 0 else 1]} (assumes QUADX motor order)"
+                where = (f"; mostly {k}: {desc[k][0 if trim[k] > 0 else 1]} (QUADX mixer positions; "
+                         "motor_output_reordering only remaps output pins, not these positions)")
             out.append(Finding("motor_imbalance", "warn" if spread < 0.3 else "problem",
                                f"motor outputs at hover differ by {100*spread:.0f} %{where}", ev,
                                ["CG offset (battery position)", "bent/chipped prop", "weak motor or bearing"],
