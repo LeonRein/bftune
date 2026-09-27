@@ -216,7 +216,7 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     for pth in safe_logs or []:
         an.safe.append((f"safe:{Path(pth).name}", safe_tune_from_log(pth)))
     for pth in safe_cli or []:
-        an.safe.append((f"safe:{Path(pth).name}", tune_from_cli_text(tune, Path(pth).read_text())))
+        an.safe.append((f"safe:{Path(pth).name}", tune_from_cli_text(tune, Path(pth).read_text(encoding="utf-8"))))
     for w in warns:
         log(f"WARNING: {w}")
     save_analysis(an, out)
@@ -257,7 +257,7 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
         "notes": idn.notes,
         "warnings": an.warnings,
     }
-    (out / "analysis.json").write_text(json.dumps(summary, indent=1, default=float))
+    (out / "analysis.json").write_text(json.dumps(summary, indent=1, default=float), encoding="utf-8")
     if plots:
         from .report import plots as P
         from .report.analysis import analysis_figures, write_analysis_report
@@ -267,7 +267,7 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
         model = model_steps(out, fl)
         an.extra["model_step"] = summary["model_step"] = {ax: step_summary(m) for ax, m in model.items()}
         save_analysis(an, out)
-        (out / "analysis.json").write_text(json.dumps(summary, indent=1, default=float))
+        (out / "analysis.json").write_text(json.dumps(summary, indent=1, default=float), encoding="utf-8")
         analysis_figures(out, fl, steps, model)
         log(f"wrote {write_analysis_report(out, an, summary)}")
     log(f"wrote {out/'analysis.json'}")

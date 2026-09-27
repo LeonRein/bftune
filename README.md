@@ -52,9 +52,9 @@ You need:
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)**, which runs the bundled Python
   tools. Nothing else to install; the first run downloads what it needs.
 - **Windows:** install [Git for Windows](https://git-scm.com/downloads/win) too. Claude Code
-  then runs the tools through Git Bash, the setup bftune was built with. Without Git, Claude Code
-  uses PowerShell and bftune's `bftune.cmd` launcher; that should work but hasn't been tested yet.
-  Please report back either way.
+  then runs the tools through Git Bash; that is tested (Windows 11, desktop app). Without Git,
+  Claude Code uses PowerShell and bftune's `bftune.cmd` launcher, which should work but hasn't been
+  tested yet. Please report back either way.
 
 Then add the plugin once. Start `claude` in a terminal (or open a Code session in the desktop app)
 and type:

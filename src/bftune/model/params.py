@@ -58,7 +58,7 @@ ITERM_RELAX_SETPOINT_THRESHOLD = 40.0
 
 
 def _load_settings_db(version: str = "2026.6") -> dict:
-    with resources.files("bftune.data").joinpath(f"settings_{version}.json").open() as fh:
+    with resources.files("bftune.data").joinpath(f"settings_{version}.json").open(encoding="utf-8") as fh:
         return json.load(fh)["settings"]
 
 

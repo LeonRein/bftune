@@ -131,7 +131,7 @@ def applied(tune_cli: str, new_dump: str, old_dump: str | None = None) -> dict:
     import re
 
     want, profile = {}, None
-    for line in Path(tune_cli).read_text().splitlines():
+    for line in Path(tune_cli).read_text(encoding="utf-8").splitlines():
         m = re.match(r"^\s*profile\s+(\d+)", line)
         if m:
             profile = int(m.group(1))

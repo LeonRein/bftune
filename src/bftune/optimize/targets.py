@@ -98,12 +98,12 @@ def check_floor(key: str, value) -> str | None:
 def load_targets(out: Path) -> dict:
     p = Path(out) / "targets.json"
     if p.exists():
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     return {"overrides": {}, "reasons": {}}
 
 
 def save_targets(out: Path, data: dict) -> None:
-    (Path(out) / "targets.json").write_text(json.dumps(data, indent=1))
+    (Path(out) / "targets.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
 
 
 def flown_ratio_targets(flown) -> dict:

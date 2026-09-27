@@ -3,11 +3,20 @@
 # plugin is enabled. Runs the Python package bundled with the plugin through uv (installs the
 # dependencies into a cached environment on first use), or falls back to an installed bftune.
 here="$(cd "$(dirname "$0")/.." && pwd)"
-# uv is often installed in the user's home but not on the agent shell's PATH
-for d in "$HOME/.local/bin" "$HOME/.cargo/bin" "/opt/homebrew/bin" "/usr/local/bin"; do
+windows=
+case "$(uname -s 2>/dev/null)" in MINGW* | MSYS* | CYGWIN*) windows=1 ;; esac
+# uv is often installed in the user's home but not on the agent shell's PATH (winget: its Links folder)
+winget=
+if [ -n "$windows" ] && [ -n "$LOCALAPPDATA" ]; then
+    winget="$(cygpath -u "$LOCALAPPDATA" 2>/dev/null)/Microsoft/WinGet/Links"
+fi
+for d in "$HOME/.local/bin" "$HOME/.cargo/bin" "/opt/homebrew/bin" "/usr/local/bin" "$winget"; do
+    [ -n "$d" ] || continue
     case ":$PATH:" in *":$d:"*) ;; *) [ -x "$d/uv" ] && PATH="$PATH:$d" ;; esac
 done
 export PATH
+# the Windows console code page (cp1252) can't print bftune's output (°, ≈, →): force UTF-8
+export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
 if command -v uv >/dev/null 2>&1 && [ -f "$here/pyproject.toml" ] && [ -f "$here/src/bftune/__main__.py" ]; then
     # `python -m bftune`, not `bftune`: the latter could resolve to this launcher on PATH and recurse
     exec uv run --quiet --frozen --project "$here" python -m bftune "$@"
@@ -21,9 +30,17 @@ if [ ! -f "$here/src/bftune/__main__.py" ]; then
     echo "bftune: the plugin folder $here has no Python package (src/bftune): reinstall or update the plugin." >&2
     exit 127
 fi
-cat >&2 <<EOF
+if [ -n "$windows" ]; then
+    cat >&2 <<EOF
+bftune: needs 'uv' (https://docs.astral.sh/uv/). Install it for the current user, in PowerShell:
+    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+(or: winget install astral-sh.uv). Then run bftune again.
+EOF
+else
+    cat >&2 <<EOF
 bftune: needs 'uv' (https://docs.astral.sh/uv/). Install it for the current user, without sudo:
     curl -LsSf https://astral.sh/uv/install.sh | sh
-(Windows: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"). Then run bftune again.
+Then run bftune again.
 EOF
+fi
 exit 127

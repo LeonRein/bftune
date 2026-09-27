@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.3
+From the first Windows session (Windows 11, Claude desktop app, Git Bash; a full tune of the 3.5" to PASS):
+- The launcher didn't find a winget-installed uv (its `WinGet\Links` folder isn't on the agent's PATH). It now
+  looks there too, in both `bin/bftune` and `bin/bftune.cmd`, and its "no uv" hint on Windows gives the Windows
+  install commands.
+- `analyze` crashed printing `≈` on the Windows console (cp1252). The launchers force UTF-8, `main` never fails on
+  an unencodable character, and every text file is read and written as UTF-8 (reports, CLI blocks, candidates).
+- The agent also hit a dangling uv Python junction (uv bug astral-sh/uv#19622) and worked around it with
+  `UV_PYTHON`. That is uv's bug and left to uv.
+
 ## 0.8.2
 Pre-release audit (before the public announcement). Gate holes, all reproduced on synthetic twins and now
 regression tests (`tests/test_release_gate.py`); the decisions are in `docs/knowledge-split.md`:

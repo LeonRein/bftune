@@ -210,7 +210,7 @@ class Doc:
     def write(self, out: Path, stem: str = "report") -> Path:
         out = Path(out)
         out.mkdir(parents=True, exist_ok=True)
-        (out / f"{stem}.md").write_text(self.markdown())
+        (out / f"{stem}.md").write_text(self.markdown(), encoding="utf-8")
         p = out / f"{stem}.html"
-        p.write_text(self.html(out))
+        p.write_text(self.html(out), encoding="utf-8")
         return p

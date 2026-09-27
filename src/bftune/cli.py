@@ -123,7 +123,7 @@ def cmd_safe(a) -> int:
     for p in a.log or []:
         an.safe.append((f"safe:{Path(p).name}", safe_tune_from_log(p)))
     for p in a.cli or []:
-        an.safe.append((f"safe:{Path(p).name}", tune_from_cli_text(an.tune, Path(p).read_text())))
+        an.safe.append((f"safe:{Path(p).name}", tune_from_cli_text(an.tune, Path(p).read_text(encoding="utf-8"))))
     save_analysis(an, Path(a.out))
     print("proven-safe tunes:", ", ".join(n for n, _ in an.safe) or "(none: the logged tune is the only reference)")
     return 0
@@ -146,7 +146,7 @@ def cmd_candidate(a) -> int:
     else:
         tune, reasons = wb.load(a.base) if a.base else (wb.on_quad.copy(), {})
     for src_file in a.apply or []:  # a CLI proposal (someone's diff, a preset): its `set` lines, later ones win
-        lines = [ln for ln in Path(src_file).read_text(errors="replace").splitlines() if ln.strip().startswith("set ")]
+        lines = [ln for ln in Path(src_file).read_text(errors="replace", encoding="utf-8").splitlines() if ln.strip().startswith("set ")]
         for ln in lines:
             body = ln.split("#", 1)[0].strip()
             tune, r = parse_candidate(tune, f"{body}  # from {Path(src_file).name}")
@@ -285,7 +285,7 @@ def cmd_brief(a) -> int:
 
     b = brief(_wb(a))
     txt = json.dumps(b, indent=1, default=float, ensure_ascii=False)
-    Path(a.out, "brief.json").write_text(txt)
+    Path(a.out, "brief.json").write_text(txt, encoding="utf-8")
     print(txt)
     return 0
 
@@ -437,7 +437,7 @@ def cmd_logs(a) -> int:
 
     html, summary = log_report(a.logs, Path(a.out), a.dump, a.index, _windows(a.window), not a.no_spectrogram,
                                _windows(a.exclude))
-    (Path(a.out) / "logs.json").write_text(json.dumps(summary, indent=1, default=float))
+    (Path(a.out) / "logs.json").write_text(json.dumps(summary, indent=1, default=float), encoding="utf-8")
     print(json.dumps(summary, indent=1, default=float) if a.json else format_summary(summary, html))
     return 0
 
@@ -533,7 +533,7 @@ def cmd_emit(a) -> int:
     dest = Path(a.to) if a.to else Path(a.out)
     res = wb.emit(tune, reasons, extra={"method": "bftune agent (tune skill)"}, log=_log, dest=dest, profile=a.profile,
                   experiment=a.experiment, full=a.full)
-    print((dest / "tune_cli.txt").read_text())
+    print((dest / "tune_cli.txt").read_text(encoding="utf-8"))
     return 0 if res["verdict"] == "PASS" else 2
 
 
@@ -541,7 +541,7 @@ def cmd_optimize(a) -> int:
     from .pipeline import optimize
 
     res = optimize(Path(a.out), style=a.style, passes=a.passes, maxiter=a.maxiter, noise_budget=a.noise_budget, log=_log)
-    print((Path(a.out) / "tune_cli.txt").read_text())
+    print((Path(a.out) / "tune_cli.txt").read_text(encoding="utf-8"))
     return 0 if res["verdict"] == "PASS" else 2
 
 
@@ -588,6 +588,11 @@ def _wb_args(s, out_default="bftune_out") -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):  # a cp1252 Windows console can't encode °, ≈, →: never crash on output
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     p = argparse.ArgumentParser(prog="bftune", description="Model-based Betaflight tuning from blackbox chirp logs",
                                 formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     p.add_argument("--version", action="version", version=__version__)

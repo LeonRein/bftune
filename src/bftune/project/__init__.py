@@ -55,7 +55,7 @@ def init_project(path: Path, name: str | None = None) -> list[Path]:
     for fn, tpl in (("quad.md", QUAD_MD), ("history.md", HISTORY_MD)):
         f = path / fn
         if not f.exists():
-            f.write_text(tpl.format(name=name, date=_dt.date.today().isoformat()))
+            f.write_text(tpl.format(name=name, date=_dt.date.today().isoformat()), encoding="utf-8")
             made.append(f)
     return made
 
@@ -75,5 +75,5 @@ def next_tune_dir(path: Path) -> Path:
         import re
 
         # "## 03 - date - summary" (deliver skill); a date heading ("## 2026-09-26 - ...") is not an iteration
-        nums += [int(m) for m in re.findall(r"^##\s+(\d{1,3})\s+-", hist.read_text(), flags=re.M)]
+        nums += [int(m) for m in re.findall(r"^##\s+(\d{1,3})\s+-", hist.read_text(encoding="utf-8"), flags=re.M)]
     return tunes / f"{(max(nums) + 1) if nums else 1:02d}-{_dt.date.today().isoformat()}"

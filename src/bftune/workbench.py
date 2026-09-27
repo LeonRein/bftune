@@ -86,7 +86,7 @@ def parse_candidate(base: Tune, text: str) -> tuple[Tune, dict[str, str]]:
     if isinstance(base, (str, Path)) and isinstance(text, Tune):  # tolerate swapped arguments
         base, text = text, base
     if "\n" not in str(text) and "set " not in str(text) and Path(str(text)).is_file():
-        text = Path(str(text)).read_text()
+        text = Path(str(text)).read_text(encoding="utf-8")
     t = base.copy()
     reasons: dict[str, str] = {}
     for line in text.splitlines():
@@ -208,7 +208,7 @@ class Workbench:
     def load(self, path: str | Path | None) -> tuple[Tune, dict[str, str]]:
         if path is None:
             return self.on_quad.copy(), {}
-        return parse_candidate(self.on_quad, Path(path).read_text())
+        return parse_candidate(self.on_quad, Path(path).read_text(encoding="utf-8"))
 
     def write_candidate(self, path: Path, tune: Tune | None = None, reasons: dict | None = None) -> Path:
         from .coverage import FEATURES
@@ -234,7 +234,7 @@ class Workbench:
                 if k in t.values:
                     why = (reasons or {}).get(k)
                     lines.append(f"set {k} = {t.values[k]}" + (f"   # {why}" if why else ""))
-        path.write_text("\n".join(lines) + "\n")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
     # ----------------------------------------------------------------- assessment
@@ -766,8 +766,8 @@ class Workbench:
         if bad:  # the CLI would reject or drop these lines and apply the rest: never write such a block
             raise SystemExit("bftune emit: refused, the tune has invalid settings (nothing written):\n  "
                              + "\n  ".join(bad))
-        (dest / "tune_cli.txt").write_text(apply_txt)
-        (dest / "revert_cli.txt").write_text(revert_txt)
+        (dest / "tune_cli.txt").write_text(apply_txt, encoding="utf-8")
+        (dest / "revert_cli.txt").write_text(revert_txt, encoding="utf-8")
         missing = [k for k, _, _, r in diff_table(old, new, reasons) if not r]
         rows = diff_table(old, new, reasons)
         plots = {"loop": P.loop_compare(self.idn, self.src.loop_hz, old, new, dest / "loop_compare.png").name}
@@ -791,7 +791,7 @@ class Workbench:
             "experiment": experiment,
             **(extra or {}),
         }
-        (dest / "tune.json").write_text(json.dumps(result, indent=1, default=float))
+        (dest / "tune.json").write_text(json.dumps(result, indent=1, default=float), encoding="utf-8")
         import shutil
 
         for png in ("plant_bode.png", "motor_model.png"):
