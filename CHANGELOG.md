@@ -8,6 +8,15 @@ From a real review session (five tunes of the 3.5", "are they good, can they be 
   with no revert block but the pilot's `diff all` (the agent had hand-built such a file next to the emitted one).
 - Skills: several tunes in the logs means the fresh `diff all` is what says which one is on the quad, so ask for
   it even when the pilot doesn't know; never hand-edit an emitted CLI.
+From the "test tune 2" session (a full tune of the 3.5"): `brief` showed a large measured-vs-model step gap
+(3.5" tune D: 7.6 vs 3.8 ms, peak +11 vs +51 %). The logged FF term was only 0.48-0.65x of the modelled one:
+Betaflight's FF jitter reduction (rc.c) scales FF down on slow stick changes, and the model took it as 1.
+- The as-flown replay now applies the jitter attenuator per sample to the pilot's logged rcCommand (logged FF
+  matches the model at 0.84-0.95x, correlation 0.91-0.97), with each candidate's own `feedforward_jitter_factor`.
+  Result: 5" 6.6/8.4/3.6 ms, +25/+21/+19 % vs measured 6.8/7.5/4.6 ms, +20/+25/+23 % (was +37-42 %); 3.5" peaks
+  +8/+4/+12 % vs +11/+15/+16 % (was +40-53 %). Re-run `analyze` to get it (the log's rcCommand is stored).
+- `brief` shows measured vs model peak next to the 50 % time and says `peak_max` is on the model's scale.
+- The synthetic twin flies with jitter factor 0 (it has no jitter reduction).
 
 ## 0.8.0
 An audit of every number and rule in the skills and the judging code (about 460 items) against one question: does

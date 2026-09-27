@@ -210,6 +210,7 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     # the pilot's own setpoint and the estimator windows: the workbench replays them through any candidate tune
     # the windows the measured step accepted: model replays use exactly these, for every candidate
     an.extra["replay"] = {"fs": float(fl.fs), "setpoint": fl.setpoint[:, :3].astype(np.float32),
+                          "rc": fl.rc[:, :3].astype(np.float32),  # raw stick: FF jitter reduction depends on it
                           "starts": {a: (steps[AXES[a]]["used"] if AXES[a] in steps else step_windows(fl, a))
                                      for a in range(3)}}
     for pth in safe_logs or []:

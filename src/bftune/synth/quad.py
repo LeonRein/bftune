@@ -135,6 +135,7 @@ def default_tune(spec: CraftSpec, target_pm: float = 40.0, target_gm_db: float =
     t = Tune.from_config(Config(values={k: str(v) for k, v in base.items()}))
     t.set("motor_poles", spec.motor_poles)
     t.set("dyn_notch_count", 1)
+    t.set("feedforward_jitter_factor", 0)  # the twin applies FF without jitter reduction; keep the model consistent
     ratios = {"roll": (45, 80, 30, 40), "pitch": (47, 84, 34, 46), "yaw": (45, 80, 0, 0)}
     op = OperatingPoint(throttle=spec.hover_throttle, motor_hz=list(_spread(spec) * spec.w_hover))
     for axis, name in enumerate(("roll", "pitch", "yaw")):

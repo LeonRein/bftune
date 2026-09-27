@@ -108,6 +108,16 @@ def rc_smoothing_cutoff(tune: Tune, rx_hz: float) -> float:
     return float(cut)
 
 
+def jitter_attenuator(rc: np.ndarray, fs: float, rx_hz: float, jitter_factor: int) -> np.ndarray:
+    """Betaflight's feedforward jitter reduction per sample (fc/rc.c calculateFeedforward): FF is scaled by
+    min(1, (mean |rcCommand change per packet| over two packets + 1) / (1 + feedforward_jitter_factor)), so slow or
+    small stick moves get only part of their FF. Needs the logged rcCommand; nonlinear, hence applied in time."""
+    per = max(1, int(round(fs / max(rx_hz, 1.0))))
+    d = np.abs(rc - np.roll(rc, per))
+    d[:per] = 0.0
+    return np.minimum(1.0, ((d + np.roll(d, per)) * 0.5 + 1.0) / (1.0 + jitter_factor))
+
+
 def rc_path_fr(tune: Tune, f: np.ndarray, rx_hz: float, dt: float, axis: int = 0) -> tuple[np.ndarray, np.ndarray]:
     """Transfer from a continuous stick-rate signal to (setpoint, feedforward) — fc/rc.c.
 
@@ -116,8 +126,9 @@ def rc_path_fr(tune: Tune, f: np.ndarray, rx_hz: float, dt: float, axis: int = 0
     lagged moving average over feedforward_averaging+1 frames. Frames are held until the
     next packet (ZOH), then setpoint and ff are PT3-smoothed at the RC-smoothing cutoff.
     Returns H_sp (deg/s per deg/s) and H_ff (deg/s^2 per deg/s) so that F = Kf * H_ff * stick.
-    The jitter attenuator is taken as 1 (sticks moving); feedforward_max_rate_limit is not
-    modelled, so stick tests must stay well below the craft's max rate.
+    The jitter attenuator is taken as 1 here (sticks moving); the as-flown replay applies it in time
+    (`jitter_attenuator`). feedforward_max_rate_limit is not modelled, so stick tests must stay well below
+    the craft's max rate.
     """
     Tr = 1.0 / rx_hz
     s = 2j * np.pi * f

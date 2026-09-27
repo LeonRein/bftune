@@ -279,7 +279,8 @@ class Workbench:
         only holds it during fast stick changes, and over whole flight windows it acts (on synthetic twins with known
         truth, dropping it predicted 0 % overshoot where the twin showed 25-40 %)."""
         from .analysis.logstep import step_estimate
-        from .analysis.loop import reference_fr
+        from .analysis.loop import jitter_attenuator, rc_path_fr
+        from .model.controller import controller_fr
 
         rp = (getattr(self.an, "extra", None) or {}).get("replay")
         if not rp or not rp["starts"].get(axis):
@@ -292,9 +293,19 @@ class Workbench:
         n = len(sp)
         f = np.fft.rfftfreq(n, 1.0 / rp["fs"])
         f[0] = 1e-6
-        T, H_sp, _ = reference_fr(tune, axis, self._plant_for(axis, tune), op, f, self.idn.dt, self.src.loop_hz,
-                                  self.rx_hz, self.idn.time_scale, relax_i=relax_i)
-        y = np.fft.irfft(T / H_sp * np.fft.rfft(sp - sp.mean()), n) + sp.mean()
+        relaxed = relax_i and (tune.s("iterm_relax").startswith("RPY")
+                               or (axis < 2 and tune.s("iterm_relax").startswith("RP")))
+        C = controller_fr(tune, axis, op, f, self.idn.dt, self.src.loop_hz, time_scale=self.idn.time_scale,
+                          include_i=not relaxed)
+        G = self._plant_for(axis, tune).fr(f)
+        H_sp0, _ = rc_path_fr(self.logged, f, self.rx_hz, self.idn.dt, axis)  # what smoothed the logged setpoint
+        H_sp, H_ff = rc_path_fr(tune, f, self.rx_hz, self.idn.dt, axis)
+        STICK = np.fft.rfft(sp - sp.mean()) / H_sp0
+        ff = np.fft.irfft(tune.kf(axis) * H_ff * STICK, n)
+        if "rc" in rp:  # jitter reduction replayed on the pilot's own stick changes (the log's FF is ~0.5-0.8x without)
+            ff = ff * jitter_attenuator(np.asarray(rp["rc"][:, axis], float), rp["fs"], self.rx_hz,
+                                        tune.i("feedforward_jitter_factor"))
+        y = np.fft.irfft(G / (1 + G * C.Cy) * (C.Cr * H_sp * STICK + np.fft.rfft(ff)), n) + sp.mean()
         return step_estimate(sp, y, rp["starts"][axis], rp["fs"], fixed=True)
 
     def axis_problem(self, tune: Tune, axis: int, relax_idle: bool = True, search: bool = False) -> AxisProblem:
@@ -986,14 +997,16 @@ def brief(wb: Workbench) -> dict:
             summary.append(f"proven-safe {s_['name']}: {s_['verdict']}, differs in {len(s_['differs'])} settings")
     meas = (getattr(an, "extra", None) or {}).get("measured_step") or {}
     model_step = (getattr(an, "extra", None) or {}).get("model_step") or {}
-    lag_pairs = [f"{ax} {m['delay_50_ms']:.1f} vs {model_step[ax]['delay_50_ms']:.1f}"
+    lag_pairs = [f"{ax} {m['delay_50_ms']:.1f} vs {model_step[ax]['delay_50_ms']:.1f} ms, peak "
+                 f"+{m['overshoot_pct']:.0f} vs +{model_step[ax]['overshoot_pct']:.0f} %"
                  + ("" if m.get("confidence", "good") == "good" else f" ({m.get('confidence')} confidence)")
                  + (" GAP" if abs(m["delay_50_ms"] - model_step[ax]["delay_50_ms"])
                     > max(1.5, 0.2 * m["delay_50_ms"]) and m.get("confidence") != "low" else "")
                  for ax, m in meas.items() if ax in model_step]
     if lag_pairs:
-        summary.append("step response 50 % time, measured in the log vs model for the flown tune [ms]: " + "; ".join(lag_pairs)
-                       + " (compare with the measurement's spread; a clear gap = the model misses something: bftune:evidence)")
+        summary.append("step response of the flown tune, measured in the log vs model (50 % time, peak): " + "; ".join(lag_pairs)
+                       + " (a clear timing gap = the model misses something: bftune:evidence; `peak_max` is on the MODEL's "
+                       "scale, so set it from model peaks and quote predicted changes, not absolute model lags, to the pilot)")
     if wb.profile:
         st = wb.stimuli(0)
         summary.append(f"flight profile: hover throttle {wb.profile.get('hover_throttle')}, hover motor "

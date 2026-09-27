@@ -24,11 +24,11 @@ overlays both). Estimator bias cancels, so:
   behaviour: find out before trusting predicted lag changes. With `fair`/`low` confidence (few
   stick moves, e.g. a mostly-chirp log) the comparison is weak: look at the overlay in
   `analysis.html` and prefer a log with more freestyle;
-- **peak and dip** are where the model is weakest (FF jitter reduction and rate limits, I-term relax
-  and other nonlinearities are simplified). If the model's peak differs from the measured one (seen
-  on a 5": 37-42 % modelled vs 20-25 % measured), keep `peak_max` on the model's scale (its default,
-  the flown tune's modelled peak, does that) and read the model's *changes* in peak, not its
-  absolute value;
+- **peak and dip**: the replay includes FF jitter reduction on the pilot's own stick changes (on
+  a 5" and a 3.5" the modelled peaks now land within a few points of the measured ones); FF rate
+  limits and I-term relax are still simplified. Where the model's peak differs from the measured
+  one, keep `peak_max` on the model's scale (its default, the flown tune's modelled peak, does
+  that) and read the model's *changes* in peak, not its absolute value;
 - after a new tune flies, compare measured vs predicted again: that is the model's report card.
 
 ## Is the model trustworthy? (read `brief.json` → `identification`, `warnings`)
