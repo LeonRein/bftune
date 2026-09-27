@@ -37,7 +37,7 @@ body:
     id: os
     attributes:
       label: Where you ran it
-      options: [Claude desktop app (Windows), Claude desktop app (macOS), Claude Code terminal (Windows), Claude Code terminal (macOS), Claude Code terminal (Linux), Other]
+      options: [Claude desktop app (Windows), Claude desktop app (macOS), Claude desktop app (Linux), Claude Code terminal (Windows), Claude Code terminal (macOS), Claude Code terminal (Linux), Other]
   - type: textarea
     id: files
     attributes:
