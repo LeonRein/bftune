@@ -9,7 +9,9 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob, Grep
 
 0. If anything essential is missing, ask first, in one message: a log of this quad, a fresh
    `diff all`, what the pilot wants from the tune (priorities) and how warm the motors run (the
-   5-step scale: cold, cool, slightly warm, warm, hot).
+   5-step scale: cold, cool, slightly warm, warm, hot). When the logs hold several tunes
+   (`bftune tunes`), the `diff all` is also what tells you which one is on the quad: ask for it
+   even if the pilot "doesn't know"; it takes them a minute.
 1. You need an analysis of a log of **this** quad. Use the one in the quad's project folder, or
    create the folder (`bftune project init`) and run `bftune analyze` into its `analysis/` (see
    `bftune:toolbox`). Also run `bftune diagnose` on the log: findings are independent evidence
@@ -21,6 +23,9 @@ allowed-tools: Bash(bftune *), Read, Write, Edit, Glob, Grep
    temperature answer does nothing.
 3. Turn the proposal into a candidate: `bftune candidate -o A cand.txt --apply proposal.txt` (its
    `set` lines on top of the tune on the quad; later lines win; add `--set` for your own variants).
+   To judge **tunes that flew** (several logs, several tunes), take each from its log:
+   `bftune candidate -o A tune_B.txt --from-log LOG_B`, and assess them all on the best model
+   (the cleanest chirp log).
 4. `bftune assess -o A cand.txt --with-current --with-safe`, and `bftune noise -o A cand.txt`.
 5. Report, per axis:
    - **stability**: worst PM/GM/Ms and which case sets it (idle, hover, full throttle, gain or delay

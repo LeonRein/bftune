@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.1
+From a real review session (five tunes of the 3.5", "are they good, can they be optimized?"):
+- `candidate --from-log LOG`: start from the tune another log flew, to compare flown tunes on one model (the
+  agent had to write a Python converter from `tunes --json`).
+- `emit --full`: when the tune on the quad is unknown, write every tuning setting (rates untouched), range-checked,
+  with no revert block but the pilot's `diff all` (the agent had hand-built such a file next to the emitted one).
+- Skills: several tunes in the logs means the fresh `diff all` is what says which one is on the quad, so ask for
+  it even when the pilot doesn't know; never hand-edit an emitted CLI.
+
 ## 0.8.0
 An audit of every number and rule in the skills and the judging code (about 460 items) against one question: does
 it need Betaflight source knowledge or control theory (the author's), or can the agent derive it better from this

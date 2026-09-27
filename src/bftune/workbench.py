@@ -674,7 +674,8 @@ class Workbench:
 
     # ----------------------------------------------------------------- deliverable
     def emit(self, tune: Tune, reasons: dict[str, str] | None = None, extra: dict | None = None, log=print,
-             dest: Path | None = None, profile: int | None = None, experiment: str | None = None) -> dict:
+             dest: Path | None = None, profile: int | None = None, experiment: str | None = None,
+             full: bool = False) -> dict:
         from .emit.cli import cli_block, diff_table
         from .noise.model import predict as predict_noise
         from .report import plots as P
@@ -713,8 +714,16 @@ class Workbench:
             if known is None:  # analysis from before 0.8: a real dump is the only way the source says "dump"
                 known = "dump" in self.src.cfg.source and "log header" not in self.src.cfg.source
             profile = self.src.cfg.active_profile if known else None
+        full_keys = None
+        if full:  # the tune on the quad is unknown: pin every tuning setting (never the pilot's rates)
+            from .coverage import FEATURES
+
+            rates = {k for ft in FEATURES if ft.group.startswith("Rates") for k in ft.keys}
+            full_keys = [k for k in new.values if k in tuning_keys() and k not in rates and str(new.values[k]) != ""]
+            comment.append("FULL tune: every tuning setting is written, because the tune on the quad was unknown "
+                           "(rates untouched).")
         apply_txt, revert_txt, problems = cli_block(old, new, profile=profile, craft=self.an.craft,
-                                                    firmware=self.an.firmware, extra_comment=comment)
+                                                    firmware=self.an.firmware, extra_comment=comment, keys=full_keys)
         (dest / "tune_cli.txt").write_text(apply_txt)
         (dest / "revert_cli.txt").write_text(revert_txt)
         missing = [k for k, _, _, r in diff_table(old, new, reasons) if not r]

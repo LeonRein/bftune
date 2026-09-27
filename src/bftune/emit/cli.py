@@ -47,10 +47,13 @@ def cli_block(
     include_guard: bool = True,
     save: bool = True,
     version: str = "2026.6",
+    keys: list[str] | None = None,
 ) -> tuple[str, str, list[str]]:
-    """Return (apply_block, revert_block, problems)."""
+    """Return (apply_block, revert_block, problems). `keys` pins these settings instead of the changes vs `old`
+    (full mode: the tune on the quad is unknown, so every tuning setting is written)."""
     db = _scope_db(version)
-    keys = changed_keys(old, new)
+    full = keys is not None
+    keys = list(keys) if full else changed_keys(old, new)
     guard = {k: v for k, v in GUARD.items() if include_guard}
     tmp = new.copy()
     for k, v in guard.items():
@@ -100,6 +103,9 @@ def cli_block(
         rhead.append("# No dump was given: the simplified_* slider state before the tune is unknown and not restored here.")
         rhead.append("# The exact way back is your `diff all` backup.")
     revert_txt = block(old_full, rhead, skip)
+    if full:  # the old tune is unknown: no revert block can be right
+        revert_txt = (f"# bftune revert - {stamp}\n# This tune was written in full because the tune on the quad was unknown.\n"
+                      "# The way back is the `diff all` backup you took before pasting.\n")
     return apply_txt, revert_txt, problems
 
 

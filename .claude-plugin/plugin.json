@@ -1,6 +1,6 @@
 {
   "name": "bftune",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "An AI tuning engineer for Betaflight FPV quads (tinywhoop to 10\"): talks to you, diagnoses your blackbox logs, tests hypotheses on an identified model of your quad and delivers verified CLI tunes. Start with /bftune:tune or just ask it to tune your quad.",
   "author": { "name": "LeonRein" },
   "homepage": "https://github.com/LeonRein/bftune",

@@ -24,6 +24,10 @@ user-invocable: false
      line the pilot must edit, unless you pass `--profile N` (from the project's older dumps,
      confirmed by the pilot). The slider state comes from the log header when there is one; the
      pilot's `diff all` backup stays the real way back. Say so explicitly.
+   - **Tune on the quad unknown** (no fresh `diff all`, several tunes in the logs): ask for the
+     `diff all` first. If it really can't be had, `emit --full` writes every tuning setting (rates
+     untouched), so the result is right whichever tune is loaded; there is no revert block then,
+     only the pilot's backup. Never hand-edit the emitted CLI: it is range-checked as written.
    - Range problems (`tune.json.problems`, printed by `emit`) must be empty for the tune. If only the
      revert block has them (values the firmware would reject), tell the pilot to use their `diff all`
      backup instead of the revert block.

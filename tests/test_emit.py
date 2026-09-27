@@ -13,3 +13,14 @@ def test_cli_block_has_guard_profile_and_save():
     # master settings come before the profile switch
     assert apply_txt.index("gyro_lpf2_static_hz") < apply_txt.index("profile 0")
     assert problems == []
+
+
+def test_full_block_pins_given_keys_without_revert():
+    from bftune.emit.cli import cli_block
+    from bftune.model.params import Tune
+
+    old = Tune({"p_roll": "40", "d_roll": "30"})
+    new = Tune({"p_roll": "45", "d_roll": "30", "gyro_lpf2_static_hz": "750"})
+    apply_txt, revert_txt, problems = cli_block(old, new, profile=None, keys=["p_roll", "d_roll", "gyro_lpf2_static_hz"])
+    assert "set d_roll = 30" in apply_txt and "set gyro_lpf2_static_hz = 750" in apply_txt
+    assert "diff all" in revert_txt and "set " not in revert_txt and not problems

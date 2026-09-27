@@ -134,7 +134,17 @@ def cmd_candidate(a) -> int:
     from .workbench import parse_candidate
 
     wb = _wb(a)
-    tune, reasons = wb.load(a.base) if a.base else (wb.on_quad.copy(), {})
+    if a.from_log:  # the tune another log flew (its header), e.g. to compare several flown tunes on one model
+        from .io.dump import load_dump
+        from .model.params import Tune
+
+        base = wb.on_quad.copy()
+        cfg = load_dump(a.from_log)
+        base.values.update({k: v for k, v in Tune.from_config(cfg).values.items() if v not in (None, "")})
+        tune, reasons = base, {}
+        print(f"base: the tune flown in {a.from_log}")
+    else:
+        tune, reasons = wb.load(a.base) if a.base else (wb.on_quad.copy(), {})
     for src_file in a.apply or []:  # a CLI proposal (someone's diff, a preset): its `set` lines, later ones win
         lines = [ln for ln in Path(src_file).read_text(errors="replace").splitlines() if ln.strip().startswith("set ")]
         for ln in lines:
@@ -153,7 +163,8 @@ def cmd_candidate(a) -> int:
         reasons.update(r)
     p = wb.write_candidate(Path(a.file), tune, reasons)
     ch = changed_keys(wb.on_quad, tune)
-    start = Path(a.base).name if a.base else "the tune on the quad" if wb.on_quad is not wb.logged else "the logged tune"
+    start = (Path(a.from_log).name if a.from_log else Path(a.base).name if a.base else "the tune on the quad"
+             if wb.on_quad is not wb.logged else "the logged tune")
     print(f"wrote {p}: {start}" + (f" + changes: {', '.join(f'{k}={tune.values[k]}' for k in ch)}" if ch else ""))
     return 0
 
@@ -521,7 +532,7 @@ def cmd_emit(a) -> int:
     tune, reasons = wb.load(a.file)
     dest = Path(a.to) if a.to else Path(a.out)
     res = wb.emit(tune, reasons, extra={"method": "bftune agent (tune skill)"}, log=_log, dest=dest, profile=a.profile,
-                  experiment=a.experiment)
+                  experiment=a.experiment, full=a.full)
     print((dest / "tune_cli.txt").read_text())
     return 0 if res["verdict"] == "PASS" else 2
 
@@ -710,6 +721,8 @@ def main(argv: list[str] | None = None) -> int:
     _wb_args(s)
     s.add_argument("file")
     s.add_argument("--base", help="start from another candidate file instead of the tune on the quad")
+    s.add_argument("--from-log", metavar="LOG",
+                   help="start from the tune another log flew (its header): assess several flown tunes on one model")
     s.add_argument("--apply", action="append", metavar="CLI_FILE",
                    help="apply the `set` lines of a CLI file (a diff, a preset, someone's tune); repeatable, --set wins")
     s.add_argument("--set", action="append", metavar="KEY=VALUE[#reason]",
@@ -772,6 +785,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--to", help="write the deliverables here instead of the analysis directory (e.g. the tune folder)")
     s.add_argument("--profile", type=int, choices=range(4), metavar="N",
                    help="PID profile index when no dump gives it (e.g. from the project's earlier dumps; confirm with the pilot)")
+    s.add_argument("--full", action="store_true",
+                   help="write every tuning setting (not just the changes): when the tune on the quad is unknown and no "
+                        "fresh diff all can be had; there is no revert block then, only the pilot's diff all backup")
     s.add_argument("--experiment", metavar="WHY",
                    help="mark the tune as a supervised experiment (e.g. a noise-headroom flight): stamped on the CLI, "
                         "report and tune.json")
