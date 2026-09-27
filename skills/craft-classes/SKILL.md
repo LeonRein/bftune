@@ -66,8 +66,12 @@ filter removes.
     improvement.
 - **No chirp:** the model comes from stick inputs (gain ±40 %) and the gate becomes relative.
   Make diagnosis-driven, small changes and plan a chirp flight.
-- **Chirps on only some axes:** the other axes have no model. Leave them unchanged unless there
-  is a diagnosed problem and a relative argument.
+- **Chirps on only some axes:** the other axes have no model, so the gate can't check them: a
+  change to their own settings FAILs (`assess` lists it under `unchecked`) and shared settings
+  (filters, TPA, idle) are not checked on them. Usually leave them as flown and ask for a chirp on
+  them. If a diagnosed problem and a relative argument (the logs of this quad) justify a change
+  anyway, that is your call: deliver it as an experiment (`emit --experiment`) and tell the pilot
+  that the model could not check that axis.
 - **Firmware other than 2026.6.x:** the model is a port of Betaflight 2026.6.
   - **Older** releases (4.x, 2025.x) differ in filters (biquad, not SVF), D-min vs D-max, TPA and
     chirp, so `analyze` refuses. Offer a diagnosis-only review (`diagnose`, `motors`, `errspec`,

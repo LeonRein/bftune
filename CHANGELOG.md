@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.2
+Pre-release audit (before the public announcement). Gate holes, all reproduced on synthetic twins and now
+regression tests (`tests/test_release_gate.py`); the decisions are in `docs/knowledge-split.md`:
+- **No-chirp gate:** cases the flown tune doesn't have (D-max or the dynamic notch newly enabled) were skipped, so
+  a D-max boost with 10° phase margin at hover passed. They are now compared with the flown tune's matching case,
+  and the absolute limits stand when nothing matches.
+- **Axis without a model** (no chirp on it, or a failed fit): changes to its settings passed unchecked. They now
+  FAIL as `unchecked` (the agent can still ship a justified change as an `--experiment`).
+- **Delay margin:** the 0.5 ms safety floor is enforced by the gate (it was only shown).
+- **Invalid settings:** a typo, an out-of-range value or a battery-scope setting made no CLI line but still
+  PASSed. The verdict now FAILs and `emit` refuses to write the block.
+- **`diff all` gaps** are the firmware defaults (a diff omits them), not the log header's values: a setting reset
+  to default after the logged flight is now seen, so the CLI and the revert block are right.
+- `bin/bftune.cmd`: launcher for Windows shells without Git Bash (untested on real Windows).
+- README rewritten for pilots: what it is and how to use it first, then install and details.
+
 ## 0.8.1
 From a real review session (five tunes of the 3.5", "are they good, can they be optimized?"):
 - `candidate --from-log LOG`: start from the tune another log flew, to compare flown tunes on one model (the

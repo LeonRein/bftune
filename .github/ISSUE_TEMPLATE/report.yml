@@ -1,0 +1,45 @@
+name: Tune or tool problem
+description: A tune flew badly, a bftune command failed, or the agent did something odd
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing bftune. The more of the evidence you can share, the better: the logs and the
+        `diff all` let us rerun exactly what the agent saw. Blackbox logs can contain GPS positions and
+        your craft name; remove them or leave the logs out if that matters to you.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you asked, what the agent delivered, how the quad flew (or the error message).
+    validations:
+      required: true
+  - type: input
+    id: craft
+    attributes:
+      label: Quad
+      placeholder: e.g. 5" 6S freestyle, 1855 kV, F405, 4 kHz loop
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Betaflight version
+      placeholder: "2026.6.2"
+    validations:
+      required: true
+  - type: input
+    id: bftune
+    attributes:
+      label: bftune version
+      description: Shown by `/plugin` in Claude Code, or in the report.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Where you ran it
+      options: [Claude desktop app (Windows), Claude desktop app (macOS), Claude Code terminal (Windows), Claude Code terminal (macOS), Claude Code terminal (Linux), Other]
+  - type: textarea
+    id: files
+    attributes:
+      label: Files
+      description: Drag in the blackbox log(s) (zipped), the `diff all`, and the tune folder (report.html, tune_cli.txt) if you have them.

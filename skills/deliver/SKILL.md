@@ -19,11 +19,13 @@ user-invocable: false
    - `tune_cli.txt` already contains:
      - the `simplified_*` = OFF guard (otherwise the Configurator's sliders overwrite explicit values);
      - master settings, then `profile N`, then `save`;
-     - ranges validated against the firmware table (`tune.json.problems` must be empty).
+     - ranges validated against the firmware table. `emit` refuses (writes nothing) when a setting is
+       unknown, out of range or not writable from the CLI block.
    - **No dump:** the profile index is unknown; `tune_cli.txt` then contains a `profile` placeholder
      line the pilot must edit, unless you pass `--profile N` (from the project's older dumps,
-     confirmed by the pilot). The slider state comes from the log header when there is one; the
-     pilot's `diff all` backup stays the real way back. Say so explicitly.
+     confirmed by the pilot). The revert block then leaves the `simplified_*` slider settings out
+     (their state before the tune is unknown); the pilot's `diff all` backup stays the real way
+     back. Say so explicitly.
    - **Tune on the quad unknown** (no fresh `diff all`, several tunes in the logs): ask for the
      `diff all` first. If it really can't be had, `emit --full` writes every tuning setting (rates
      untouched), so the result is right whichever tune is loaded; there is no revert block then,

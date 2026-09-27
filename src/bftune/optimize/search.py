@@ -535,12 +535,16 @@ def _below_floor(r: dict, pm: float, robust: bool) -> bool:
     from .targets import SAFETY_FLOOR as F
 
     sfx = "_robust" if robust else ""
+    dm = r.get("dm_ms")
     return (pm < F["pm_min" + sfx] - 0.5 or r["gm_db"] < F[("gm_min_robust_db" if robust else "gm_min_db")] - 0.2
-            or r["ms"] > F["ms_max" + sfx] + 0.02)
+            or r["ms"] > F["ms_max" + sfx] + 0.02
+            or (not robust and dm is not None and dm == dm and dm < F["dm_min_ms"] - 0.05))
 
 
 def violations(rows: list[dict], goals: Goals, noise_ratio: float | None = None) -> list[str]:
     """Human-readable list of violated constraints for one axis (empty = all met)."""
+    from .targets import SAFETY_FLOOR
+
     out = []
     for r in rows:
         rob = r.get("robust", False)
@@ -556,6 +560,11 @@ def violations(rows: list[dict], goals: Goals, noise_ratio: float | None = None)
             bad.append(f"GM {r['gm_db']:.1f}<{round(gm_min, 1):g} dB")
         if r["ms"] > ms_max + 0.02:
             bad.append(f"Ms {r['ms']:.2f}>{round(ms_max, 2):g}")
+        # delay margin: the design target shapes the search (penalty); the gate holds the fixed floor. Delay
+        # uncertainty itself is covered by the hiK+delay variants.
+        dm, dm_floor = r.get("dm_ms"), SAFETY_FLOOR["dm_min_ms"]
+        if not rob and not r["case"].startswith("idle") and dm is not None and dm == dm and dm < dm_floor - 0.05:
+            bad.append(f"DM {dm:.2f}<{dm_floor:g} ms")
         if bad:
             tag = " (limit = flown tune)" if r.get("relaxed") else ""
             if not r["case"].startswith("idle") and _below_floor(r, pm, rob):

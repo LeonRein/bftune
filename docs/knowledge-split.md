@@ -56,3 +56,15 @@ Rules that follow:
 Kept as they are, deliberately: the safety floor; the `simplified_*` guard; the firmware-version
 gate; the dynamic notch at its minimum as a worst case; estimator internals (window lengths,
 coherence thresholds, regularisation) whose effect on precision the output reports.
+
+## Decisions from the 0.8.2 pre-release audit
+Holes in the gate and the CLI output, fixed with author knowledge (firmware facts and the safety floor);
+the judgement calls stay with the agent.
+
+| item | before | now |
+|---|---|---|
+| No-chirp (relative) gate, cases the flown tune doesn't have (D-max or the dynamic notch newly enabled) | skipped: a D-max boost with PM 10° at hover passed | compared with the flown tune's matching case without it; with no match the absolute limits stand |
+| Axis without a model (no chirp or failed fit) | not assessed at all, so any change on it passed | a change to its own settings FAILs as `unchecked`; the agent may still ship it as an `--experiment` with a relative argument |
+| Delay margin | shown as a floor, only an optimizer penalty | the fixed floor (0.5 ms) is part of the gate; the design target stays a search target the agent can set |
+| Unknown, out-of-range or battery-scope settings | logged, verdict PASS, the line silently missing from the CLI | the verdict FAILs and `emit` refuses to write the block (the Betaflight CLI rejects such lines and applies the rest) |
+| `diff all` gaps | filled from the log header | a `diff all` omits settings at their default (cli.c), so they are the firmware default (target-dependent ones excepted) |

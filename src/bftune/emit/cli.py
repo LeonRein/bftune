@@ -60,6 +60,8 @@ def cli_block(
         tmp.values[k] = v
     all_keys = list(dict.fromkeys(list(guard) + keys))
     problems = validate(tmp, all_keys, version)
+    problems += [f"{k}: {db[k]['scope']}-scope setting, not written by this block" for k in all_keys
+                 if k in db and db[k].get("scope") not in ("master", "profile", "rateprofile")]
     problems += [f"revert: {p}" for p in validate(old, [k for k in all_keys if k in old.values], version)]
 
     def block(values: Tune, header: list[str], skip: tuple = ()) -> str:

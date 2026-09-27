@@ -70,8 +70,8 @@ set dterm_lpf2_type = PT3
 set gyro_lpf1_type = OFF # shortcut: zeroes that filter's cutoffs
 profile 0                # ignored; values apply to the tuned profile
 ```
-Later lines override earlier ones. Unknown or out-of-range settings are reported by
-`assess`/`emit`. Every changed line should carry a `# reason`, because `emit` shows reasons in
+Later lines override earlier ones. Unknown or out-of-range settings make `assess` FAIL and
+`emit` refuse. Every changed line should carry a `# reason`, because `emit` shows reasons in
 the report.
 
 ## Python API (custom investigations)

@@ -26,6 +26,8 @@ class Config:
     active_profile: int = 0
     active_rateprofile: int = 0
     profile_known: bool = False  # a `profile N` line was read (a real dump); a log header has no profile index
+    is_diff: bool = False  # a `diff all`: settings at their default are left out
+    defaulted: list[str] = field(default_factory=list)  # keys a diff left out, filled with the firmware default
     firmware_version: str | None = None
     board: str | None = None
     craft_name: str | None = None
@@ -65,9 +67,36 @@ class Config:
         return tuple(int(x) for x in self.firmware_version.split("."))
 
 
+# defaults that depend on the target or the hardware (not safe to assume when a diff leaves them out)
+_TARGET_DEFAULTS = {"pid_process_denom", "dshot_bidir", "motor_poles", "motor_kv"}
+
+
+def _is_diff(text: str, n_set: int) -> bool:
+    """`diff all` (settings at default left out) vs a full `dump`: the echoed command, else the size."""
+    for raw in text.splitlines()[:5]:
+        cmd = raw.strip().lstrip("#").strip().lower()
+        if cmd.startswith("diff"):
+            return True
+        if cmd.startswith("dump"):
+            return False
+    return n_set < 300  # a 2026.6 dump prints every setting (~560 lines on a quad), a diff all ~100-150
+
+
+def fill_diff_defaults(cfg: Config) -> None:
+    """A `diff all` leaves out every setting at its default. Without this, a gap would be filled from the log
+    header later, which is wrong when the pilot reset a setting to default after the logged flight."""
+    from ..model.params import DEFAULTS
+
+    for k, v in DEFAULTS.items():
+        if k not in cfg.values and k not in _TARGET_DEFAULTS:
+            cfg.values[k] = str(v)
+            cfg.defaulted.append(k)
+
+
 def parse_dump(text: str) -> Config:
     cfg = Config(source="dump")
     section: dict[str, str] = cfg.master
+    n_set = 0
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -100,11 +129,15 @@ def parse_dump(text: str) -> Config:
         m = _SET_RE.match(line)
         if m:
             section[m.group(1)] = m.group(2)
+            n_set += 1
     # `dump` prints the active profile selection via "set profile"? no: the last one listed
     # with `dump all` is re-selected at the end by "profile N"; handle both.
     cfg.values = dict(cfg.master)
     cfg.values.update(cfg.profiles.get(cfg.active_profile, {}))
     cfg.values.update(cfg.rateprofiles.get(cfg.active_rateprofile, {}))
+    if n_set and _is_diff(text, n_set):
+        cfg.is_diff = True
+        fill_diff_defaults(cfg)
     return cfg
 
 

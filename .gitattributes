@@ -1,0 +1,4 @@
+# stored as-is: the Windows launcher keeps its CRLF line endings, the sh scripts LF
+*.cmd -text
+bin/bftune text eol=lf
+*.sh text eol=lf

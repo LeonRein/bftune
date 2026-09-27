@@ -26,7 +26,7 @@ import numpy as np
 
 from .flight import AXES
 from .model.controller import OperatingPoint
-from .model.params import Tune, thrust_linear_slope
+from .model.params import Tune, _load_settings_db, thrust_linear_slope
 from .model.plant import Plant
 from .optimize.search import (
     AxisProblem,
@@ -433,6 +433,8 @@ class Workbench:
         return getattr(self.idn, "source", "chirp") != "chirp"
 
     def _relative_violations(self, axis: int, rows: list[dict], absolute: list[str]) -> list[str]:
+        from .optimize.targets import SAFETY_FLOOR
+
         cache = self.__dict__.setdefault("_logged_rows", {})
         if axis not in cache:
             t = self.logged
@@ -446,9 +448,15 @@ class Workbench:
         out = [v for v in absolute if v.startswith("motor noise")]
         for r in rows:
             c = r["case"]
-            if c not in failing or c not in ref:
+            if c not in failing:
                 continue
-            q = ref[c]
+            # a case the flown tune doesn't have (D-max or the dynamic notch newly enabled) is compared with the
+            # flown tune's matching case without it: that is how the flown tune behaved there
+            q = next((ref[k] for k in (c, c.replace("/dmax", "/d"), c.replace("/dn@min", ""),
+                                        c.replace("/dmax", "/d").replace("/dn@min", "")) if k in ref), None)
+            if q is None:  # nothing flown to compare with: the absolute limits stand
+                out += [v + " (relative gate: no flown reference)" for v in absolute if v.split(":")[0] == c]
+                continue
             bad = []
             pm, pm0 = r.get("pm_eff", r["pm"]), q.get("pm_eff", q["pm"])
             if pm < pm0 - 2.0:
@@ -457,6 +465,9 @@ class Workbench:
                 bad.append(f"GM {r['gm_db']:.1f} < flown {q['gm_db']:.1f} dB")
             if r["ms"] > q["ms"] * 1.05 + 0.02:
                 bad.append(f"Ms {r['ms']:.2f} > flown {q['ms']:.2f}")
+            dm, dm0 = r.get("dm_ms"), q.get("dm_ms")
+            if dm is not None and dm0 is not None and dm == dm and dm0 == dm0 and dm < min(0.9 * dm0, SAFETY_FLOOR["dm_min_ms"]):
+                bad.append(f"DM {dm:.2f} < flown {dm0:.2f} ms")
             if bad:
                 out.append(f"{c}: " + ", ".join(bad) + " (relative gate: no chirp)")
         return out
@@ -500,7 +511,8 @@ class Workbench:
         from .emit.cli import changed_keys
         from .model.params import validate
 
-        axes = list(self.idn.axes) if axes is None else axes
+        full = axes is None
+        axes = list(self.idn.axes) if full else axes
         per = {AXES[a]: self.assess_axis(tune, a, steps) for a in axes}
         motor_noise, noise_viol = self._motor_noise(per), []
         if motor_noise is not None:
@@ -550,8 +562,23 @@ class Workbench:
         if relaxed:
             notes.append(f"idle limits on {', '.join(relaxed)} = the flown tune's idle margins (it flies, but misses the design "
                          "limits there; at very low rpm the model is least certain). Judge idle by improvement.")
-        problems = validate(tune, [k for k in changed_keys(self.logged, tune) if k in tuning_keys()])
-        verdict = "PASS" if not any(e["violations"] for e in per.values()) and not problems and not noise_viol else "FAIL"
+        changed = changed_keys(self.logged, tune)
+        problems = validate(tune, changed)  # every changed key: a typo or out-of-range value must never PASS
+        db = _load_settings_db()
+        problems += [f"{k}: a {db[k]['scope']}-scope setting, which bftune's CLI block can't write" for k in changed
+                     if k in db and db[k].get("scope") not in ("master", "profile", "rateprofile")]
+        unchecked = []
+        if full:  # an axis without a model (no chirp on it, or its fit failed) can't be judged: don't change it
+            for a in sorted(set(range(3)) - set(self.idn.axes)):
+                keys = [k for k in changed if AXES[a] in k.split("_") and db.get(k, {}).get("scope") != "rateprofile"]
+                if keys:
+                    unchecked.append(f"{AXES[a]}: no model of this axis (no usable chirp or fit), so changes to "
+                                     f"{', '.join(keys)} can't be checked: keep them as flown")
+                else:
+                    notes.append(f"{AXES[a]}: no model of this axis; shared settings (filters, TPA, idle) are not "
+                                 "checked on it")
+        verdict = ("PASS" if not any(e["violations"] for e in per.values()) and not problems and not noise_viol
+                   and not unchecked else "FAIL")
         if self.stale:
             notes.insert(0, self.stale)
         if self.relative_gate:
@@ -560,7 +587,7 @@ class Workbench:
         overridden = {k: getattr(self.goals, k) for k, v in self.target_sources.items() if v in ("override", "command line")}
         return {"verdict": verdict, "gate": "relative" if self.relative_gate else "absolute",
                 "targets": {"style": self.goals.style, "overrides": overridden},
-                "axes": per, "notes": notes, "range_problems": problems,
+                "axes": per, "notes": notes, "range_problems": problems, "unchecked": unchecked,
                 "motor_noise": None if motor_noise is None else round(motor_noise, 3), "noise_violations": noise_viol,
                 "hf_filtering": {"gyro": round(g, 4), "gyro_dterm": round(dchain, 5), "safe_max": [round(x, 5) for x in self.hf_ref]}}
 
@@ -735,6 +762,10 @@ class Workbench:
                            "(rates untouched).")
         apply_txt, revert_txt, problems = cli_block(old, new, profile=profile, craft=self.an.craft,
                                                     firmware=self.an.firmware, extra_comment=comment, keys=full_keys)
+        bad = [p for p in problems if not p.startswith("revert:")]
+        if bad:  # the CLI would reject or drop these lines and apply the rest: never write such a block
+            raise SystemExit("bftune emit: refused, the tune has invalid settings (nothing written):\n  "
+                             + "\n  ".join(bad))
         (dest / "tune_cli.txt").write_text(apply_txt)
         (dest / "revert_cli.txt").write_text(revert_txt)
         missing = [k for k, _, _, r in diff_table(old, new, reasons) if not r]
