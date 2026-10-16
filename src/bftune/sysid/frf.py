@@ -97,7 +97,8 @@ def estimate(
         tot_t += np.bincount(b2[m2], minlength=nb)
         sat_t += np.bincount(b2[m2], weights=(~ok[m2]).astype(float), minlength=nb)
     ref = Szx[reference]
-    H = {k: v / np.where(np.abs(ref) > 0, ref, np.nan) for k, v in Szx.items()}
+    with np.errstate(invalid="ignore"):  # empty bins -> NaN
+        H = {k: v / np.where(np.abs(ref) > 0, ref, np.nan) for k, v in Szx.items()}
     coh = {k: np.abs(Szx[k]) ** 2 / np.maximum(Szz * Sxx[k], 1e-30) for k in signals}
     fc = np.sqrt(edges[:-1] * edges[1:])
     valid = 1.0 - sat_t / np.maximum(tot_t, 1)
