@@ -15,8 +15,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.ndimage import uniform_filter1d
 
 from ..flight import Flight
+from ..gaps import segments as gap_free_segments
 
 
 @dataclass
@@ -81,7 +83,8 @@ def _arx_fit(cmd: np.ndarray, hz: np.ndarray, d: int):
     return coef, r2, len(Y)
 
 
-def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min_samples: int = 3000) -> MotorModel | None:
+def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min_samples: int = 3000,
+                    bin_by_s: float = 0.2) -> MotorModel | None:
     if fl.motor_hz is None or fl.motor.shape[1] == 0:
         return None
     ts = 1.0 / fl.fs
@@ -89,36 +92,30 @@ def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min
     hz_all = fl.motor_hz
     lo, hi = np.percentile(hz_all[armed], [2, 99.5])
     edges = np.geomspace(max(lo, 30.0), hi, n_bins + 1)
-    # contiguous armed runs
-    idx = np.flatnonzero(np.diff(np.concatenate([[0], armed.astype(int), [0]])))
-    segments = [(a, b) for a, b in zip(idx[::2], idx[1::2]) if b - a > 200]
+    # contiguous armed runs without blackbox gaps; per run and motor: (command, rpm, local mean rpm). Samples are
+    # binned by the local mean speed, not by their own rpm: selecting by the fitted output truncates its fluctuations
+    # and biases the lag short (narrow bins on a hover log gave 5-15 ms instead of ~25 ms)
+    chunks = [(fl.motor[a:b, m], hz_all[a:b, m], uniform_filter1d(hz_all[a:b, m], max(1, int(bin_by_s * fl.fs))))
+              for a, b in gap_free_segments(fl, armed, 201) for m in range(hz_all.shape[1])]
 
     # pick the transport delay that maximizes fit over all data
     best_d, best_r2 = 0, -np.inf
     for d in range(max_delay_samples + 1):
-        us, ys = [], []
-        for a, b in segments:
-            for m in range(hz_all.shape[1]):
-                us.append(fl.motor[a:b, m])
-                ys.append(hz_all[a:b, m])
-        out = _arx_fit(us, ys, d)
+        out = _arx_fit([c[0] for c in chunks], [c[1] for c in chunks], d)
         if out and out[1] > best_r2:
             best_d, best_r2 = d, out[1]
 
     centers, taus, gains, ns, r2s = [], [], [], [], []
     for k in range(n_bins):
         us, ys = [], []
-        for a, b in segments:
-            for m in range(hz_all.shape[1]):
-                y = hz_all[a:b, m]
-                u = fl.motor[a:b, m]
-                inb = (y >= edges[k]) & (y < edges[k + 1])
-                # split into contiguous in-bin chunks
-                cut = np.flatnonzero(np.diff(np.concatenate([[0], inb.astype(int), [0]])))
-                for s, e in zip(cut[::2], cut[1::2]):
-                    if e - s > 20:
-                        us.append(u[s:e])
-                        ys.append(y[s:e])
+        for u, y, ym in chunks:
+            inb = (ym >= edges[k]) & (ym < edges[k + 1])
+            # split into contiguous in-bin chunks
+            cut = np.flatnonzero(np.diff(np.concatenate([[0], inb.astype(int), [0]])))
+            for s, e in zip(cut[::2], cut[1::2]):
+                if e - s > 20:
+                    us.append(u[s:e])
+                    ys.append(y[s:e])
         n = sum(len(y) for y in ys)
         if n < min_samples:
             continue

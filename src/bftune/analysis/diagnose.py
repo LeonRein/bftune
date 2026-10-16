@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 
 from ..flight import AXES, BOX_ANGLE, BOX_HORIZON, Flight, motor_saturated
+from ..gaps import continuous
 from ..sysid.chirp import find_chirps
 from .profile import control_scale, hover, scaled_band
 
@@ -33,7 +34,7 @@ class Finding:
 
 
 def _acro_mask(fl: Flight) -> np.ndarray:
-    ok = fl.mode(0) & ~fl.mode(BOX_ANGLE) & ~fl.mode(BOX_HORIZON)
+    ok = fl.mode(0) & ~fl.mode(BOX_ANGLE) & ~fl.mode(BOX_HORIZON) & continuous(fl)  # runs never span a blackbox gap
     for r in find_chirps(fl):
         ok[r.start : r.end] = False
     return ok

@@ -74,12 +74,14 @@ def sanity_warnings(fl: Flight, idn: Identification | None) -> list[str]:
         w.append(f"log rate {fl.fs:.0f} Hz: noise above {fl.fs/2:.0f} Hz is aliased (handled by the alias-aware noise model)")
     if fl.motor_hz is None:
         w.append("no eRPM in log (bidirectional DShot off?): RPM filter and motor model unavailable")
-    dt = np.diff(fl.t)
-    if dt.size:
-        gaps = dt > 2.5 * np.median(dt)
-        if gaps.sum() > 0:
-            w.append(f"{int(gaps.sum())} time gap(s) in the log (missing frames, {float(dt[gaps].sum()):.2f} s in total): "
-                     "the logging device may not keep up with this rate; spectra near gaps are less reliable")
+    from .gaps import gaps
+
+    g = gaps(fl.t)
+    if g.size:
+        missing = float(np.sum(fl.t[g + 1] - fl.t[g]))
+        w.append(f"{g.size} time gap(s) in the log (missing frames, {missing:.2f} s in total): the logging device may "
+                 "not keep up with this rate; every analysis splits the data at the gaps, chirp rounds with a gap are "
+                 "not used for identification")
     from .analysis.profile import control_scale, hover
     from .flight import motor_saturated
 

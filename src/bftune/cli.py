@@ -75,7 +75,8 @@ def cmd_inspect(a) -> int:
                   f"motor Hz {np.percentile(fl.motor_hz, 5):.0f}–{np.percentile(fl.motor_hz, 99):.0f}")
         for r in find_chirps(fl):
             print(f"    chirp {AXES[r.axis]:5s} t={fl.t[r.start]:6.1f}s {r.f_start:.1f}->{r.f_end:.0f} Hz thr {r.throttle:.2f}"
-                  f"{' (angle/horizon)' if r.level_mode else ''}{' (reconstructed)' if r.reconstructed else ''}")
+                  f"{' (angle/horizon)' if r.level_mode else ''}{' (reconstructed)' if r.reconstructed else ''}"
+                  f"{f' ({r.gaps} blackbox gaps: not used)' if r.gaps else ''}")
         ch = {k: cfg.values.get(k) for k in ("chirp_amplitude_roll", "chirp_amplitude_pitch", "chirp_amplitude_yaw",
                                              "chirp_frequency_start_deci_hz", "chirp_frequency_end_deci_hz",
                                              "chirp_time_seconds") if cfg.values.get(k) is not None}

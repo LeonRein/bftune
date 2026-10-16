@@ -14,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..flight import AXES, BOX_ANGLE, BOX_HORIZON, Flight
+from ..gaps import continuous
 
 # used only when the log cannot tell (labelled "convention" wherever they are used)
 CONVENTION_FLICK = {"deg_s": 300.0, "ramp_ms": 50.0}
@@ -21,7 +22,7 @@ CONVENTION_SNAP_RAMP_MS = 30.0
 
 
 def _acro(fl: Flight) -> np.ndarray:
-    return fl.mode(0) & ~fl.mode(BOX_ANGLE) & ~fl.mode(BOX_HORIZON)
+    return fl.mode(0) & ~fl.mode(BOX_ANGLE) & ~fl.mode(BOX_HORIZON) & continuous(fl)
 
 
 def hover(fl: Flight) -> tuple[float, float | None]:

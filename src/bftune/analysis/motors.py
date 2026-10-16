@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..flight import Flight
+from ..gaps import continuous
 
 
 def _segments(mask: np.ndarray, min_len: int) -> list[tuple[int, int]]:
@@ -30,7 +31,7 @@ def rpm_events(fl: Flight) -> list[dict]:
     out = []
     n_min = max(2, int(0.005 * fl.fs))
     for m in range(fl.motor_hz.shape[1]):
-        for a, b in _segments(low[:, m] & armed & (fl.throttle > 0.05), n_min):
+        for a, b in _segments(low[:, m] & armed & continuous(fl) & (fl.throttle > 0.05), n_min):
             cmd = float(np.mean(fl.motor[a:b, m]))
             others = float(np.median(np.delete(fl.motor[a:b], m, axis=1)))
             w0, w1 = max(0, a - int(0.5 * fl.fs)), min(fl.n, b + int(0.5 * fl.fs))

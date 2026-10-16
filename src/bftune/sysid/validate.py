@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..flight import BOX_ANGLE, BOX_HORIZON, Flight
+from ..gaps import continuous
 from ..model.controller import OperatingPoint, controller_fr
 from ..model.params import Tune, thrust_linear_slope
 from .chirp import find_chirps
@@ -74,8 +75,8 @@ class ReplayResult:
 
 def freestyle_windows(fl: Flight, min_len_s: float = 2.0, exclude_chirp: bool = True,
                       settle_s: float = 1.0) -> list[tuple[int, int]]:
-    """Armed, acro (no angle/horizon), no chirp; skips `settle_s` after every mode change."""
-    ok = fl.mode(0) & ~fl.mode(BOX_ANGLE) & ~fl.mode(BOX_HORIZON)
+    """Armed, acro (no angle/horizon), no chirp, no blackbox gap inside; skips `settle_s` after every mode change."""
+    ok = fl.mode(0) & ~fl.mode(BOX_ANGLE) & ~fl.mode(BOX_HORIZON) & continuous(fl)
     changes = np.flatnonzero(np.diff(fl.mode_mask) != 0) + 1
     for c in changes:
         ok[c : c + int(settle_s * fl.fs)] = False

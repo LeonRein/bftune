@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..flight import BOX_ANGLE, BOX_HORIZON, Flight
+from ..gaps import gaps
 
 DEBUG_CHIRP = 96  # debug_mode index in 2026.6 (see settings DB)
 
@@ -32,6 +33,7 @@ class ChirpRun:
     z: np.ndarray | None = None  # reconstructed excitation (when debug_mode != CHIRP)
     f_inst: np.ndarray | None = None  # reconstructed instantaneous frequency
     reconstructed: bool = False
+    gaps: int = 0  # blackbox gaps inside the run: not continuous, so identification skips it
 
     @property
     def n(self) -> int:
@@ -39,8 +41,15 @@ class ChirpRun:
 
 
 def find_chirps(fl: Flight, min_duration_s: float = 3.0) -> list[ChirpRun]:
-    if fl.debug_mode != DEBUG_CHIRP:
-        return reconstruct_chirps(fl, min_duration_s)
+    """Every chirp run (also those with blackbox gaps, `gaps` > 0: their time is still chirp, not free flight)."""
+    runs = _logged_chirps(fl, min_duration_s) if fl.debug_mode == DEBUG_CHIRP else reconstruct_chirps(fl, min_duration_s)
+    g = gaps(fl.t)
+    for r in runs:
+        r.gaps = int(np.sum((g >= r.start - 1) & (g < r.end)))  # gaps inside or touching the run
+    return runs
+
+
+def _logged_chirps(fl: Flight, min_duration_s: float) -> list[ChirpRun]:
     ax = fl.debug[:, 1].astype(int)
     fr = fl.debug[:, 2] / 10.0
     active = (ax >= 0) & (fr > 0)

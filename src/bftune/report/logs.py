@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ..flight import AXES, Flight, exclude, load_flight, tuning_keys, without_crashes
+from ..gaps import continuous
 from . import plots as _style  # noqa: F401  (shared matplotlib look)
 from .doc import Doc, evidence
 
@@ -25,7 +26,7 @@ LOG_COLORS = ["#6b7280", "#2563eb", "#16a34a", "#d97706", "#dc2626", "#7c3aed"]
 
 
 def _armed_windows(fl: Flight, n: int, mask: np.ndarray | None = None) -> np.ndarray:
-    ok = fl.mode(0) if mask is None else mask
+    ok = (fl.mode(0) if mask is None else mask) & continuous(fl)  # no window across a blackbox gap
     starts = np.arange(0, fl.n - n, n // 2)
     cs = np.concatenate([[0], np.cumsum(ok)])
     return starts[(cs[starts + n] - cs[starts]) == n]

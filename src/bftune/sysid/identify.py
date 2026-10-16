@@ -12,7 +12,7 @@ from ..model.params import Tune
 from ..model.plant import Plant
 from .chirp import ChirpRun, find_chirps
 from .fit import FitResult, fit_best, weights_from_coherence
-from .frf import BandFRF, plant_frf
+from .frf import BandFRF, band_edges, plant_frf
 from .motor import MotorModel, identify_motors
 
 DEFAULT_STRUCTURES = {
@@ -114,16 +114,21 @@ def identify(
     min_fit_hz: float = 3.0,
     coh_min: float = 0.5,
 ) -> Identification:
-    runs = find_chirps(fl)
+    found = find_chirps(fl)
+    runs = [r for r in found if not r.gaps]  # data across a blackbox gap is not continuous
+    gapped = (f"{len(found) - len(runs)} chirp round(s) skipped: blackbox gaps (missing frames) inside"
+              if len(runs) < len(found) else None)
     if not runs:
         from .freestyle import identify_freestyle
 
-        return identify_freestyle(fl, tune)
+        idn = identify_freestyle(fl, tune)
+        idn.notes += [gapped] if gapped else []
+        return idn
     structures = structures or DEFAULT_STRUCTURES
     dt = 1.0 / fl.loop_hz
     time_scale = fl.loop_hz / (fl.fs * fl.log_ratio)
     motor = identify_motors(fl)
-    notes: list[str] = []
+    notes: list[str] = [gapped] if gapped else []
     if abs(time_scale - 1) > 0.005:
         notes.append(f"loop runs at {1/(dt*time_scale):.0f} Hz real time (gyro clock skew {100*(1/time_scale-1):+.1f}%)")
     axes: dict[int, AxisIdent] = {}
@@ -134,7 +139,17 @@ def identify(
             continue
         if any(r.level_mode for r in sel):
             notes.append(f"{AXES[axis]} chirp flown in ANGLE/HORIZON: fit starts at {min_fit_hz} Hz")
-        frf = plant_frf(fl, runs, axis)
+        # each round on its own (common bands): one bad round (gust, crash, corrupt data) must neither spoil the
+        # combined estimate nor set the gain spread
+        edges = band_edges(max(min(r.f_start for r in sel), 0.5), min(max(r.f_end for r in sel), 0.45 * fl.fs))
+        per = [plant_frf(fl, [r], axis, edges) for r in sel] if len(sel) >= 2 else []
+        good = _coherent_rounds(per)
+        if not all(good):
+            notes.append(f"{AXES[axis]}: {good.count(False)} of {len(sel)} chirp rounds incoherent on their own "
+                         "(gust, crash, bad data): not used")
+            sel = [r for r, g in zip(sel, good) if g]
+            per = [p for p, g in zip(per, good) if g]
+        frf = plant_frf(fl, sel, axis, edges)
         op = operating_point_for(fl, sel)
         C = controller_fr(tune, axis, op, frf.f, dt, fl.loop_hz, time_scale=time_scale)
         G = frf.H["y"]
@@ -181,7 +196,7 @@ def identify(
         if not passed:
             chain.notes.append("modelled filter chain disagrees with the log: check firmware version/config source")
         plant = best.plant
-        round_gains = _round_gains(fl, sel, axis, plant, frf.f, use) if len(sel) >= 2 else []
+        round_gains = _round_gains(per, plant, frf.f, use) if len(per) >= 2 else []
         plant.ref_motor_hz = float(np.mean(op.motor_hz))
         plant.ref_vbat = op.vbat
         plant.ref_throttle = op.throttle
@@ -216,15 +231,22 @@ def identify(
 CONVENTION_GAIN_U = 0.10  # robust variants never narrower than +-10 % gain / +0.3 ms delay (convention)
 
 
-def _round_gains(fl, runs, axis, plant, f_all, use) -> list[float]:
+def _coherent_rounds(per: list[BandFRF]) -> list[bool]:
+    """Which chirp rounds are coherent (fit thresholds) in at least 80 % of the bands where most rounds are."""
+    if len(per) < 2:
+        return [True] * len(per)
+    fc = np.unique(np.concatenate([p.f for p in per]))  # a round that stops early lacks the top bands
+    c = np.array([np.isin(fc, p.f[(p.coh["u"] >= 0.8) & (p.coh["y"] >= 0.5)]) for p in per])
+    ref = c.mean(axis=0) >= 0.5
+    good = [bool(ci[ref].mean() >= 0.8) if ref.any() else True for ci in c]
+    return good if any(good) else [True] * len(per)
+
+
+def _round_gains(per: list[BandFRF], plant, f_all, use) -> list[float]:
     """Plant gain of each chirp round relative to the combined fit (geometric mean of |G_round / G_model| over the
     fit band): how repeatable the identification is on this quad."""
     out = []
-    for r in runs:
-        try:
-            fr = plant_frf(fl, [r], axis)
-        except Exception:  # noqa: BLE001 - a bad round must not break identification
-            continue
+    for fr in per:
         m = (fr.coh["y"] >= 0.5) & (fr.f >= f_all[use].min()) & (fr.f <= f_all[use].max()) if use.any() else None
         if m is None or m.sum() < 4:
             continue
