@@ -45,7 +45,9 @@ lpf2 is off and pid_process_denom > 1 the gyro samples of one PID period are ave
 - TPA: factor = 1 − rate/(1−bp)·max(thr−bp, 0) (+ low-throttle TPA, latched after the first crossing).
 - pidSum/1000 → mixer (LEGACY, airmode), pidsum_limit 500/400.
 - thrust_linear (`pidApplyThrustLinearization`): f(x) = x(1 + e(1−x)(1 + e(1−2x))) per motor, with
-  throttle pre-compensated. bftune scales the plant gain by f′ at the operating motor command.
+  throttle pre-compensated. It runs before `motor[]` (mixer.c applyMixToMotors), so the identified K holds
+  f′ of the identification tune at the identification throttle; bftune replaces it by f′ of the evaluated
+  tune at the case throttle (motor physics scheduled separately on `motor[]`).
 
 ## Feedforward (`fc/rc.c calculateFeedforward`)
 Per RX frame: speed = Δsetpoint·rxRate → PT1 (τ = 0.004·s/(1−s), normalised to 250 Hz) →

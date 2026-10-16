@@ -16,7 +16,7 @@ import numpy as np
 
 from ..flight import BOX_ANGLE, BOX_HORIZON, Flight
 from ..model.controller import OperatingPoint, controller_fr
-from ..model.params import Tune
+from ..model.params import Tune, thrust_linear_slope
 from .chirp import find_chirps
 from .identify import Identification
 
@@ -116,6 +116,9 @@ def replay(
             thr = float(np.mean(fl.throttle[s:e]))
             mhz = fl.motor_hz[s:e].mean(axis=0) if fl.motor_hz is not None else np.array(ai.op.motor_hz)
             plant = ai.plant.scaled(float(np.mean(mhz)), float(np.mean(fl.vbat[s:e])), idn.motor)
+            # the thrust_linear slope in K moves with throttle (same as optimize/search.py AxisProblem)
+            plant.params["K"] *= (thrust_linear_slope(tune.i("thrust_linear"), thr)
+                                  / thrust_linear_slope(idn.thrust_linear, ai.op.throttle))
             op = OperatingPoint(throttle=thr, motor_hz=list(mhz), vbat=float(np.mean(fl.vbat[s:e])), d_boost=0.5)
             C = controller_fr(tune, axis, op, f, idn.dt, fl.loop_hz, include_i=include_i, time_scale=idn.time_scale)
             G = plant.fr(f)

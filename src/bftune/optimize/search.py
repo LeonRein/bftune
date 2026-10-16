@@ -174,10 +174,13 @@ class AxisProblem:
         for c in cases:
             C = controller_fr(tune, axis, c.op, fr, idn.dt, loop_hz, time_scale=idn.time_scale)
             G = plant_fr(c.plant_structure, c.plant_params, fr)
-            # thrust_linear changes actuator gain relative to the identification tune
+            # thrust_linear: K contains the identification tune's curve slope at the identification throttle
+            # (pid.c pidApplyThrustLinearization runs before motor[] in mixer.c applyMixToMotors); the case
+            # plant was rescheduled on motor[] physics only, so the curve slope moves to this tune at this throttle
             y = min(max(c.op.throttle, 0.0), 1.0)
             G = G * (thrust_linear_slope(tune.i("thrust_linear"), y)
-                     / thrust_linear_slope(getattr(idn, "thrust_linear", 0), y)) * output_limit_ratio(tune, idn)
+                     / thrust_linear_slope(getattr(idn, "thrust_linear", 0), idn.axes[axis].op.throttle)) \
+                * output_limit_ratio(tune, idn)
             kp, ki = tune.kp(axis), tune.ki(axis)
             bP = C.Fg * (C.P / kp if kp > 0 else PTERM_SCALE)  # per unit Kp (includes yaw LPF, TPA if PD)
             bI = C.Fg * (C.I / ki if ki > 0 else ITERM_SCALE * idn.dt / (1 - flt.zinv(fr * idn.time_scale, idn.dt)))
