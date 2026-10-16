@@ -30,14 +30,15 @@ def test_overrides_and_floor():
 def test_profile_and_uncertainty_are_data_derived():
     from bftune.optimize.targets import build_goals
 
-    prof = {"hover_throttle": 0.25, "throttle_pct": {"90": 0.53}}
+    prof = {"hover_throttle": 0.25, "throttle_pct": {"90": 0.7}}
     unc = {"k_hi": 1.15, "k_lo": 0.84, "dT": 0.0003, "source": "chirp rounds: gain spread ±15 %"}
     g, src = build_goals("freestyle", 20.0, None, None, prof, unc)
-    assert g.mid_throttle == 0.53 and "log" in src["mid_throttle"]
+    assert g.mid_throttle == 0.7 and "log" in src["mid_throttle"]  # the pilot flies above halfway hover-full
+    assert g.hover_throttle == 0.25 and "hover" in src["hover_throttle"]
     assert abs(g.gain_uncertainty - 0.15) < 1e-9 and src["gain_uncertainty"].startswith("chirp rounds")
-    # a pilot hovering high: the mid case stays at least 0.1 above hover
+    # a pilot hovering high: the mid case sits halfway between hover and full throttle
     g2, _ = build_goals("freestyle", 20.0, None, None, {"hover_throttle": 0.5, "throttle_pct": {"90": 0.52}}, unc)
-    assert g2.mid_throttle == 0.6
+    assert g2.mid_throttle == 0.75
     # the robust variants may be widened, never narrowed below the data
     g3, _ = build_goals("freestyle", 20.0, {"gain_uncertainty": "0.25"}, None, prof, unc)
     assert g3.gain_uncertainty == 0.25
@@ -77,3 +78,41 @@ def test_metrics_ignore_frequencies_below_f_min():
     L = 40 / s * np.exp(-s * 0.002) + 3 / s**2  # an I-like low-frequency hump plus a real crossover
     full, cut = metrics(f, L), metrics(f, L, f_min=2.0)
     assert np.isfinite(cut.fc) and cut.fc >= 2.0 and cut.ms <= full.ms + 1e-9
+
+
+def test_mid_case_is_a_property_of_the_quad_and_extrapolation_is_flagged():
+    from bftune.optimize.targets import extrapolation_note
+
+    # the same 3.5" flown calmly (p90 0.35, up to 0.38) and hard (p90 0.63, up to 0.83): the same mid case
+    calm, _ = build_goals("freestyle", 20.0, None, None, {"hover_throttle": 0.29, "throttle_pct": {"90": 0.35, "99": 0.38}})
+    hard, _ = build_goals("freestyle", 20.0, None, None, {"hover_throttle": 0.30, "throttle_pct": {"90": 0.63, "99": 0.83}})
+    assert abs(calm.mid_throttle - hard.mid_throttle) <= 0.01 and calm.mid_throttle > 0.6
+    note = extrapolation_note(calm)
+    assert note and "mid 0.65 (+0.27" in note and "full 1.00 (+0.62" in note and "less certain" in note
+    assert "mid" not in extrapolation_note(hard) and extrapolation_note(
+        build_goals("freestyle", 20.0, None, None, {"hover_throttle": 0.3, "throttle_pct": {"90": 0.6, "99": 0.95}})[0]) is None
+
+
+def test_hover_case_at_logged_hover_and_extrapolated_cases_widened():
+    from types import SimpleNamespace as NS
+
+    import numpy as np
+
+    from bftune.io.dump import Config
+    from bftune.model.params import Tune
+    from bftune.optimize.search import build_cases
+
+    plant = NS(scaled=lambda hz, vbat, motor: NS(params={"K": hz, "T": 0.01}, structure="x"))
+    idn = NS(axes={0: NS(op=NS(throttle=0.33, motor_hz=[220.0] * 4, vbat=23.0, dyn_notch_hz=None), plant=plant)}, motor=None)
+    fl = NS(loop_hz=8000, idle_hz=lambda pct: 60.0, motor_hz_at=lambda thr: np.full(4, 100 + 400 * thr))
+    tune = Tune.from_config(Config()).set("d_max_gain", 0).set("d_max_advance", 0).set("dyn_notch_count", 0)
+    g, _ = build_goals("freestyle", 20.0, None, None, {"hover_throttle": 0.24, "throttle_pct": {"90": 0.35, "99": 0.38}})
+    cases = {c.label: c for c in build_cases(fl, idn, tune, 0, g)}
+    assert cases["hover/d"].op.throttle == 0.24 and cases["hover/d"].plant_params["K"] == 100 + 400 * 0.24
+    # the reference stays the identification point when the log gives no hover throttle
+    g0, _ = build_goals("freestyle", 20.0)
+    assert {c.label: c for c in build_cases(fl, idn, tune, 0, g0)}["hover/d"].op.throttle == 0.33
+    # inside the logged range: the identification's uncertainty; full throttle, 0.62 above it: widened
+    k = {c.label: c.plant_params["K"] for c in cases.values()}
+    assert abs(k["hover/d/hiK+delay"] / k["hover/d"] - (1 + g.gain_uncertainty)) < 1e-9
+    assert abs(k["full/d/hiK+delay"] / k["full/d"] - (1 + g.gain_uncertainty + 0.3 * 0.62)) < 1e-9

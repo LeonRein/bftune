@@ -30,19 +30,38 @@ SAFETY_FLOOR = {
 
 
 def data_profile_targets(profile: dict | None) -> dict:
-    """Targets the flight itself decides: the "mid" design case sits at the throttle the pilot actually uses
-    (p90 of armed throttle, at least 0.1 above hover, at most 0.85) instead of a fixed 50 %."""
+    """Targets the flight itself decides: the "hover" case at the logged hover throttle; the "mid" design case
+    halfway from hover to full throttle (a property of the quad, so every log of it gets the same case), higher when
+    the pilot flies higher (p90 of armed throttle), at most 0.85; the top of the logged throttle range (p99)."""
     if not profile or not profile.get("throttle_pct"):
         return {}
-    p90 = profile["throttle_pct"].get("90")
+    pct = profile["throttle_pct"]
     hov = profile.get("hover_throttle") or 0.3
-    if p90 is None:
+    if pct.get("90") is None:
         return {}
-    out = {"mid_throttle": round(float(min(0.85, max(p90, hov + 0.1))), 2)}
+    out = {"hover_throttle": round(float(hov), 3),
+           "mid_throttle": round(float(min(0.85, max(pct["90"], hov + 0.5 * (1 - hov)))), 2)}
+    if pct.get("99") is not None:
+        out["logged_throttle_max"] = float(pct["99"])
     d = profile.get("idle_duration_p75_s")
     if d:  # a full period must fit into a typical idle stretch (dive, chop) for a sensitivity peak to matter there
         out["idle_f_min"] = round(float(np.clip(1.0 / d, 0.5, 5.0)), 2)
     return out
+
+
+def extrapolation_note(goals) -> str | None:
+    """A warning when design cases lie well above the logged throttle range (their plant is extrapolated)."""
+    from .search import extrapolation
+
+    far = [(k, t, extrapolation(goals, t)) for k, t in (("mid", goals.mid_throttle), ("full", 1.0))]
+    far = [x for x in far if x[2] > 0.1]
+    if not far:
+        return None
+    cases = ", ".join(f"{k} {t:.2f} (+{e:.2f}, robust gain ±{100 * (goals.gain_uncertainty + 0.3 * e):.0f} %)"
+                      for k, t, e in far)
+    return (f"design cases above the logged throttle range (p99 {goals.logged_throttle_max:.2f}): {cases}. Their motor "
+            "speed and plant are extrapolated, so the margins there are less certain (their robust variants are widened "
+            "by 0.3 x the distance); fly a log with punch-outs/high throttle to cover them")
 
 
 def data_bands(flown_hover_fc: float | None) -> dict:
@@ -68,7 +87,7 @@ STYLE_DEFAULTS = {
 # only these fields are design targets (the rest of Goals are internal weights)
 TARGET_KEYS = ("ms_max", "ms_max_robust", "pm_min", "pm_min_robust", "gm_min_db", "gm_min_robust_db", "dm_min_ms",
                "noise_budget", "d_over_p", "i_over_p", "perf_band", "tracking_band", "idle_weight",
-               "ff_overshoot_flick", "ff_overshoot_snap", "dmax_ratio_max", "hf_extrapolation", "peak_max", "mid_throttle", "idle_f_min",
+               "ff_overshoot_flick", "ff_overshoot_snap", "dmax_ratio_max", "hf_extrapolation", "peak_max", "hover_throttle", "mid_throttle", "idle_f_min",
                "tracking_weight", "gain_range", "gain_uncertainty", "delay_uncertainty_ms")
 
 
@@ -139,9 +158,12 @@ def build_goals(style: str | None, flown_hover_fc: float | None = None, override
     for k, v in data_bands(flown_hover_fc).items():
         setattr(g, k, v)
         src[k] = "from the flown tune's crossover"
+    why = {"hover_throttle": "from the log (hover throttle)", "mid_throttle": "from the log (halfway hover-full, or p90)",
+           "idle_f_min": "from the log (how long idle stretches last)"}
     for k, v in data_profile_targets(profile).items():
         setattr(g, k, v)
-        src[k] = "from the log (p90 throttle)" if k == "mid_throttle" else "from the log (how long idle stretches last)"
+        if k in why:
+            src[k] = why[k]
     for k, v in flown_ratio_targets(flown).items():
         setattr(g, k, v)
         src[k] = "from the flown tune (I/P)" if k == "i_over_p" else "convention, widened to the flown tune's D/P"

@@ -38,7 +38,7 @@ Rules that follow:
 | Motor saturation (raw DShot ≥ 2046) | wrong with `motor_output_limit` < 100 or non-DShot | the motorOutput range × `motor_output_limit` (mixer.c) |
 | Motor imbalance and HF motor noise | reported only above 10 % / warned above 3 % | always reported; imbalance severity kept as a hint, motor noise without severity (compare within the quad) |
 | Noise model's motion/noise boundary (70 Hz) | fixed for every quad | 3.7 × the measured control bandwidth (70 Hz on a 5", ~40 Hz on a 10") |
-| "Mid" design case at 50 % throttle | fixed | p90 of the throttle the pilot uses (≥ hover + 0.1), a settable target |
+| "Mid" design case at 50 % throttle | fixed | halfway from hover to full throttle (the same on every log of a quad), p90 of the throttle flown if higher, a settable target; cases above the logged throttle are flagged and their robust variants widened |
 | Robust variants (+10 % / −12 % gain, +0.3 ms) | fixed for every quad | from the gain spread between chirp rounds, never narrower than the convention; can be widened, not narrowed |
 | Step tests (300 deg/s in 50 ms, snap 0.6 × max rate in 30 ms, RC link 250 Hz) | fixed; the flick was faster than almost anything the 5" pilot flew | the pilot's typical and fast moves measured in the log; the link rate from the header or the log |
 | FF overshoot targets (10 / 15 %) on synthetic ramps | fixed conventions on an unrealistic input | `as flown` step: the model replays the pilot's logged setpoint through the same estimator as the measurement; `peak_max` defaults to the flown tune's own peak |

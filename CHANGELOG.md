@@ -21,6 +21,12 @@ reproduced on real logs and now regression tests:
   model). Chirp rounds touching a gap are skipped and every round must be coherent on its own, so one bad round no
   longer sets the gain uncertainty (it read +-298 %). The motor fit bins by 0.2 s mean speed, which removes a short
   time-constant bias on hover logs with a narrow speed range.
+- **Throttle cases:** "hover" sat at the identification throttle (0.33 on a chirp log hovering at 0.24); it is now
+  the logged hover throttle (`hover_throttle`; the identification point stays the scaling reference). "mid" was the
+  p90 throttle, so one 3.5" got 0.39 from a calm log and 0.63 from a hard one; it is now halfway from hover to full
+  throttle (p90 if higher). Cases more than 0.1 above the logged throttle (p99) are warned about in `analyze` and the
+  brief, and their robust variants widen the gain uncertainty by 0.3 x the distance (the throttle->rpm fit missed
+  the measured motor speed by about that on real logs).
 
 ## 0.8.3
 From the first Windows session (Windows 11, Claude desktop app, Git Bash; a full tune of the 3.5" to PASS):

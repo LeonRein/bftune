@@ -974,7 +974,7 @@ def brief(wb: Workbench) -> dict:
 
     from . import __version__
     from .emit.cli import changed_keys
-    from .optimize.targets import SAFETY_FLOOR, goals_dict
+    from .optimize.targets import SAFETY_FLOOR, extrapolation_note, goals_dict
 
     an, idn, src = wb.an, wb.idn, wb.src
     keys = [k for g in GROUPS.values() for k in g]
@@ -1041,10 +1041,13 @@ def brief(wb: Workbench) -> dict:
     if wb.profile:
         st = wb.stimuli(0)
         summary.append(f"flight profile: hover throttle {wb.profile.get('hover_throttle')}, hover motor "
-                       f"{wb.profile.get('hover_motor_hz')} Hz, mid design case at throttle {wb.goals.mid_throttle}, "
+                       f"{wb.profile.get('hover_motor_hz')} Hz, design cases hover {wb.goals.hover_throttle} / mid "
+                       f"{wb.goals.mid_throttle} / full 1.0 (logged up to {wb.goals.logged_throttle_max:.2f}), "
                        f"roll stick moves {st['flick'][0]:.0f} deg/s in {st['flick'][1] * 1000:.0f} ms typical / "
                        f"{st['snap'][0]:.0f} in {st['snap'][1] * 1000:.0f} ms fast ({st['source']}), link "
                        f"{wb.rx_hz:.0f} Hz ({wb.profile.get('rx_rate_source', 'header')})")
+    if note := extrapolation_note(wb.goals):
+        summary.append(note)
     summary += [f"finding [{f['severity']}] {f['summary']}" for f in getattr(an, "diagnosis", []) if f["severity"] != "info"]
     return {
         "summary": summary,

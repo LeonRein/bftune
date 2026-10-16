@@ -15,8 +15,9 @@ never rules. Replace them with this quad's evidence.
 ## Design targets: derive them from the evidence, within a fixed safety floor
 `bftune targets -o A` shows every target with its source:
 - `from the flown tune` / `from the log` / `chirp rounds`: derived from this quad's data. The
-  performance and tracking bands scale with the flown tune's hover crossover; the "mid" design case
-  sits at the throttle the pilot actually uses (p90); the robust variants come from the gain spread
+  performance and tracking bands scale with the flown tune's hover crossover; the "hover" case sits at
+  the logged hover throttle, the "mid" case halfway from hover to full throttle (or higher, at p90, when
+  the pilot flies higher); the robust variants come from the gain spread
   between chirp rounds (never narrower than ±10 %); `peak_max` is the flown tune's as-flown step peak.
 - `convention`: a neutral starting point from control practice or FPV habit. **Not a
   measurement.** Confirm it or replace it with a value you can justify.
@@ -60,9 +61,10 @@ wants. A violation there reads "BELOW THE SAFETY FLOOR". The robust variants can
 (`gain_uncertainty`, `delay_uncertainty_ms`), never narrowed below the chirp rounds' spread.
 
 ## Reading `assess`
-- **Cases:** idle, hover (the identification point), mid (`mid_throttle`), full (100 %), each at
+- **Cases:** idle, hover (`hover_throttle`), mid (`mid_throttle`), full (100 %), each at
   base D (`/d`) and at D-max (`/dmax`), plus robust variants `hiK+delay`, `loK` (sizes from
-  `targets`) and `dn@min` (dynamic notch at its lowest frequency).
+  `targets`, widened on cases above the logged throttle range: the brief flags those) and `dn@min`
+  (dynamic notch at its lowest frequency).
 - **Idle limits relative to the flown tune.** At very low rpm the motor lag is extrapolated, and some
   quads (large props, low idle) can't reach the idle design limits at all. When the tune that flew
   already misses them, the idle cases only require "no worse than the flown tune" (`assess` notes

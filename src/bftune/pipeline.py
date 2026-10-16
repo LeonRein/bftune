@@ -212,6 +212,10 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
 
     an.extra["bftune"] = __version__
     an.extra["profile"] = flight_profile(fl)  # how this quad is flown: scales for cases, step tests, diagnostics
+    from .optimize.targets import build_goals, extrapolation_note
+
+    if note := extrapolation_note(build_goals(None, profile=an.extra["profile"], uncertainty=idn.uncertainty)[0]):
+        warns.append(note)
     from .analysis.logstep import step_windows
 
     # the pilot's own setpoint and the estimator windows: the workbench replays them through any candidate tune

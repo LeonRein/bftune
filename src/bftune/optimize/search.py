@@ -56,7 +56,9 @@ class Goals:
     ff_overshoot_snap: float = 15.0
     peak_max: tuple | None = None  # as-flown step peak per axis [%]; None = the flown tune's own (workbench)
     idle_f_min: float = 0.0  # idle margins count above this [Hz]; the workbench derives it from the log
-    mid_throttle: float = 0.5  # the "mid" design case; the workbench sets it from the throttle the pilot uses
+    hover_throttle: float | None = None  # the "hover" case; the workbench sets it from the log (None: identification)
+    mid_throttle: float = 0.5  # the "mid" design case; the workbench sets it from hover (physics) and the throttle flown
+    logged_throttle_max: float = 1.0  # top of the logged throttle range (p99): cases above it are extrapolated
     gain_uncertainty: float = 0.10  # robust variants: plant gain x(1+u) and /(1+1.25u), delay +y ms (identification)
     delay_uncertainty_ms: float = 0.3
 
@@ -113,21 +115,29 @@ def output_limit_ratio(tune: Tune, idn: Identification) -> float:
     return tune.i("motor_output_limit") / max(getattr(idn, "motor_output_limit", 100), 1)
 
 
+def extrapolation(goals: Goals, thr: float) -> float:
+    """How far a case's throttle lies above the logged throttle range (0 inside it)."""
+    return max(0.0, thr - goals.logged_throttle_max)
+
+
 def build_cases(fl: FlightSummary, idn: Identification, tune: Tune, axis: int, goals: Goals,
                 search: bool = False) -> list[Case]:
     """Design cases for one axis. `search=True` (optimizers) adds the D-max cases whenever a D-max driver is enabled,
     so a search that raises d_max above d is constrained by them; the verdict adds them when d_max > d."""
     ai = idn.axes[axis]
     cases: list[Case] = []
-    thr_id = ai.op.throttle
-    points = [("idle", 0.02, goals.idle_weight), ("hover", thr_id, 1.0), ("mid", goals.mid_throttle, 0.6), ("full", 1.0, 0.0)]
+    thr_hov = goals.hover_throttle or ai.op.throttle  # the plant is scaled from the identification point to each case
+    points = [("idle", 0.02, goals.idle_weight), ("hover", thr_hov, 1.0), ("mid", goals.mid_throttle, 0.6), ("full", 1.0, 0.0)]
     for label, thr, w in points:
         if label == "idle":
             mhz = np.full(len(ai.op.motor_hz), idle_motor_hz(fl, tune))
-        elif label == "hover":
+        elif label == "hover" and goals.hover_throttle is None:
             mhz = np.array(ai.op.motor_hz)
         else:
             mhz = fl.motor_hz_at(thr)
+        # above the logged throttle the motor speed comes from the throttle->rpm fit: it missed the measured speed
+        # by ~0.3 x the distance on real logs (fit below 0.38, checked at 0.6-0.9), so the robust variants widen by that
+        u = goals.gain_uncertainty + 0.3 * extrapolation(goals, thr)
         base = ai.plant.scaled(float(np.mean(mhz)), ai.op.vbat, idn.motor)
         dn = ai.op.dyn_notch_hz
         # D only rises above base D through d_max_gain (gyro) or d_max_advance (setpoint): pid.c
@@ -139,7 +149,7 @@ def build_cases(fl: FlightSummary, idn: Identification, tune: Tune, axis: int, g
             fmin = goals.idle_f_min if label == "idle" else 0.0
             cases.append(Case(op.label, op, dict(base.params), base.structure, w if boost == 0 else 0.0, False, None, fmin))
             # uncertainty variants (constraint only)
-            u, dT_ = goals.gain_uncertainty, goals.delay_uncertainty_ms / 1000.0
+            dT_ = goals.delay_uncertainty_ms / 1000.0
             for vf, dT, tag in ((1.0 + u, dT_, "hiK+delay"), (1.0 / (1.0 + 1.25 * u), 0.0, "loK")):
                 p = dict(base.params)
                 p["K"] *= vf
