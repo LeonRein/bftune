@@ -214,18 +214,24 @@ def identify(
             round_gains=round_gains,
         )
     if motor is not None:
-        for a, ai in axes.items():
-            t_ax = ai.plant.params["tau"]
-            t_mm = float(motor.tau_at(np.mean(ai.op.motor_hz)))
-            if abs(t_mm / t_ax - 1) > 0.5:
-                notes.append(
-                    f"{AXES[a]}: motor-model tau {t_mm*1000:.0f} ms vs axis fit {t_ax*1000:.0f} ms (>50% apart); only the "
-                    "motor model's *trend* with speed is used for scheduling"
-                )
+        notes += [n for a, ai in axes.items()
+                  if (n := motor_tau_note(motor, AXES[a], ai.plant.params["tau"], float(np.mean(ai.op.motor_hz))))]
     idn = Identification(axes=axes, motor=motor, runs=runs, dt=dt, time_scale=time_scale, notes=notes,
                          thrust_linear=tune.i("thrust_linear"), motor_output_limit=tune.i("motor_output_limit"))
     idn.uncertainty = chirp_uncertainty(axes)
     return idn
+
+
+def motor_tau_note(motor: MotorModel, axis: str, t_ax: float, hz0: float) -> str | None:
+    """A note when the motor lag disagrees (>50 %) with the axis fit at the identification speed hz0 or at any faster
+    speed bin (the trend schedules the hover..full-throttle cases; physically the lag only shortens with speed)."""
+    hz = np.concatenate([[hz0], motor.bins_hz[motor.bins_hz > hz0]])
+    t_mm = motor.tau_at(hz)
+    k = int(np.argmax(np.abs(t_mm / t_ax - 1)))
+    if abs(t_mm[k] / t_ax - 1) <= 0.5:
+        return None
+    return (f"{axis}: motor-model tau {t_mm[k]*1000:.0f} ms at {hz[k]:.0f} Hz vs axis fit {t_ax*1000:.0f} ms at {hz0:.0f} Hz "
+            "(>50% apart); only the motor model's *trend* with speed is used for scheduling")
 
 
 CONVENTION_GAIN_U = 0.10  # robust variants never narrower than +-10 % gain / +0.3 ms delay (convention)

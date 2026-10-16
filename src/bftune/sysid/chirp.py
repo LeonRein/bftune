@@ -107,6 +107,14 @@ def _chirp_signal(count: np.ndarray, f0: float, f1: float, T: float, dt: float) 
     return exc, f
 
 
+def _abs_corr(a: np.ndarray, b: np.ndarray) -> float:
+    """|Pearson correlation|, 0 when either signal is constant (an axis without stick input: np.std of a constant
+    can round to 5e-17, so ptp, which is exact)."""
+    if np.ptp(a) == 0 or np.ptp(b) == 0:
+        return 0.0
+    return float(abs(np.corrcoef(a, b)[0, 1]))
+
+
 def reconstruct_chirps(fl: Flight, min_duration_s: float = 3.0) -> list[ChirpRun]:
     """Recover chirp runs from the CHIRP mode switch when the debug fields are not logged.
 
@@ -146,7 +154,7 @@ def reconstruct_chirps(fl: Flight, min_duration_s: float = 3.0) -> list[ChirpRun
                     continue
                 for ax in range(3):
                     sp = fl.setpoint[a:b, ax][m]
-                    c = abs(np.corrcoef(exc[m], sp - sp.mean())[0, 1]) if np.std(sp) > 0 else 0.0
+                    c = _abs_corr(exc[m], sp)
                     if best is None or c > best[0]:
                         best = (c, centre + off, ax)
             base = best[1] if best else base

@@ -97,8 +97,10 @@ REF_FC_HZ = 19.0  # the 5" the diagnose bands were first tuned on crossed over n
 def control_scale(fl: Flight) -> tuple[float, str]:
     """The quad's control bandwidth (~ its hover crossover), the scale of every control-band quantity (propwash band,
     resonance search, I-term band, where "noise" starts). Measured from the log: the frequency where the setpoint ->
-    gyro response lags 90 deg, / 1.25 (that ratio held on a 3.5", a 5" and a whoop twin). Falls back to 0.11 x the hover
-    motor frequency (right for 3.5"-10", too high for whoops), then to a 5"'s 19 Hz. Cached on the flight."""
+    gyro response lags 90 deg, / 1.25 (that ratio held on a 3.5", a 5" and a whoop twin), only where that response is
+    coherent (stick moves rarely reach the crossover; the phase of incoherent bins is noise and gave 9-113 Hz on real
+    logs). Falls back to 0.11 x the hover motor frequency (right for 3.5"-10", too high for whoops), then to a 5"'s
+    19 Hz. Cached on the flight."""
     if "control_scale" in fl.extras:
         return fl.extras["control_scale"]
     from .logstep import step_windows
@@ -110,21 +112,22 @@ def control_scale(fl: Flight) -> tuple[float, str]:
         if len(starts) < 5:
             continue
         w, f = np.hanning(n), np.fft.rfftfreq(n, 1 / fl.fs)
-        sxx, sxy = 0.0, 0.0
+        sxx, syy, sxy = 0.0, 0.0, 0.0
         for s in starts:
             x, y = fl.setpoint[s : s + n, ax], fl.gyro_unfilt[s : s + n, ax]
             X, Y = np.fft.rfft((x - x.mean()) * w), np.fft.rfft((y - y.mean()) * w)
-            sxx, sxy = sxx + np.abs(X) ** 2, sxy + np.conj(X) * Y
-        ph = np.unwrap(np.angle(sxy / np.maximum(sxx, 1e-12)))
-        m = (f > 1) & (f < 0.4 * fl.fs)
-        k = np.flatnonzero(m & (ph < -np.pi / 2))
+            sxx, syy, sxy = sxx + np.abs(X) ** 2, syy + np.abs(Y) ** 2, sxy + np.conj(X) * Y
+        coh = np.abs(sxy) ** 2 / np.maximum(sxx * syy, 1e-12)
+        end = int(np.argmax(((f > 1) & (coh < 0.5)) | (f >= 0.4 * fl.fs)))  # coherent band, contiguous from DC
+        ph = np.unwrap(np.angle(sxy[:end] / np.maximum(sxx[:end], 1e-12)))
+        k = np.flatnonzero((f[:end] > 1) & (ph < -np.pi / 2))
         if k.size:
             est.append(float(f[k[0]]) / 1.25)
     if est:
         res = (float(np.mean(est)), "measured from the log (setpoint -> gyro phase)")
     else:
         _, hz = hover(fl)
-        res = (0.11 * hz, "from the hover motor frequency (no stick activity to measure)") if hz \
+        res = (0.11 * hz, "from the hover motor frequency (the stick moves do not reach the control band)") if hz \
             else (REF_FC_HZ, "convention (a 5\")")
     fl.extras["control_scale"] = res
     return res

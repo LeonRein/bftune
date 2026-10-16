@@ -5,6 +5,11 @@ described by a first-order lag plus a transport delay,
 
     omega(s)/cmd(s) = g e^{-s Td} / (tau s + 1),
 
+where the lag is fitted on the DShot duty times the battery voltage (relative to its median): the
+ESC applies duty x Vbat to the motor, and the sag during punch-outs otherwise reads as a long lag
+(46-57 ms instead of ~25 ms at full throttle on a 5"). The gain stays per unit duty at the voltage
+flown at that speed (sag included), as the throttle cases use it.
+
 and the time constant falls with speed (linearized motor + prop load):
 1/tau = c0 + c1*omega. We fit an ARX(1) model per speed bin on the logged 1 kHz
 data (command and eRPM are sampled in the same PID iteration), then fit c0, c1.
@@ -84,19 +89,21 @@ def _arx_fit(cmd: np.ndarray, hz: np.ndarray, d: int):
 
 
 def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min_samples: int = 3000,
-                    bin_by_s: float = 0.2) -> MotorModel | None:
+                    bin_by_s: float = 0.2, max_rise: float = 1.25) -> MotorModel | None:
     if fl.motor_hz is None or fl.motor.shape[1] == 0:
         return None
     ts = 1.0 / fl.fs
     armed = fl.mode(0)
     hz_all = fl.motor_hz
     lo, hi = np.percentile(hz_all[armed], [2, 99.5])
+    v_med = float(np.median(fl.vbat[armed]))
+    volts = fl.vbat / v_med if v_med > 0 else np.ones(fl.n)  # applied voltage = duty x Vbat (see module doc)
     edges = np.geomspace(max(lo, 30.0), hi, n_bins + 1)
     # contiguous armed runs without blackbox gaps; per run and motor: (command, rpm, local mean rpm). Samples are
     # binned by the local mean speed, not by their own rpm: selecting by the fitted output truncates its fluctuations
     # and biases the lag short (narrow bins on a hover log gave 5-15 ms instead of ~25 ms)
-    chunks = [(fl.motor[a:b, m], hz_all[a:b, m], uniform_filter1d(hz_all[a:b, m], max(1, int(bin_by_s * fl.fs))))
-              for a, b in gap_free_segments(fl, armed, 201) for m in range(hz_all.shape[1])]
+    chunks = [(fl.motor[a:b, m] * volts[a:b], hz_all[a:b, m], uniform_filter1d(hz_all[a:b, m], max(1, int(bin_by_s * fl.fs))),
+               volts[a:b]) for a, b in gap_free_segments(fl, armed, 201) for m in range(hz_all.shape[1])]
 
     # pick the transport delay that maximizes fit over all data
     best_d, best_r2 = 0, -np.inf
@@ -107,8 +114,8 @@ def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min
 
     centers, taus, gains, ns, r2s = [], [], [], [], []
     for k in range(n_bins):
-        us, ys = [], []
-        for u, y, ym in chunks:
+        us, ys, vs = [], [], []
+        for u, y, ym, v in chunks:
             inb = (ym >= edges[k]) & (ym < edges[k + 1])
             # split into contiguous in-bin chunks
             cut = np.flatnonzero(np.diff(np.concatenate([[0], inb.astype(int), [0]])))
@@ -116,6 +123,7 @@ def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min
                 if e - s > 20:
                     us.append(u[s:e])
                     ys.append(y[s:e])
+                    vs.append(v[s:e])
         n = sum(len(y) for y in ys)
         if n < min_samples:
             continue
@@ -126,12 +134,18 @@ def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min
         if not (0 < a_ < 1) or b_ <= 0:
             continue
         tau = -ts / np.log(a_)
-        gain = b_ / (1 - a_)
+        gain = b_ / (1 - a_) * float(np.mean(np.concatenate(vs)))  # per unit duty at this speed's voltage
         centers.append(np.sqrt(edges[k] * edges[k + 1]))
         taus.append(tau)
         gains.append(gain)
         ns.append(nn)
         r2s.append(r2)
+    # physically the lag shortens with speed: a bin above the best-sampled one with a clearly longer lag comes from
+    # large-signal data (punch-outs: current limit, sag) or disturbance-dominated airflow, not the small-signal lag
+    if centers:
+        ref = taus[int(np.argmax(ns))]
+        keep = [i for i in range(len(centers)) if centers[i] <= centers[int(np.argmax(ns))] or taus[i] <= max_rise * ref]
+        centers, taus, gains, ns, r2s = ([v[i] for i in keep] for v in (centers, taus, gains, ns, r2s))
     if len(centers) < 2:
         return None
     centers, taus = np.array(centers), np.array(taus)

@@ -27,6 +27,17 @@ reproduced on real logs and now regression tests:
   throttle (p90 if higher). Cases more than 0.1 above the logged throttle (p99) are warned about in `analyze` and the
   brief, and their robust variants widen the gain uncertainty by 0.3 x the distance (the throttle->rpm fit missed
   the measured motor speed by about that on real logs).
+- **Motor lag at high speed:** battery sag was not in the motor fit's input, so on one 5" log the 350/450 Hz bins
+  read 46-57 ms (25 ms elsewhere; the other log of the same quad 26-29 ms) and drove a full-throttle PM of 35 deg and a
+  roll P of 32 instead of 44. The lag is now fitted on command × Vbat (28 ms; robust to vbat timing and smoothing),
+  bins above the best-sampled one with a >1.25x longer lag are dropped, and the motor-vs-axis tau note also checks
+  the faster speed bins.
+- **Control bandwidth** (`flight_profile.control_bandwidth_hz`, which scales diagnose bands, the noise model and the
+  "coherent band only up to" warning) read the setpoint -> gyro phase where the sticks have no power: 113, 20 and
+  9 Hz on three logs, so the warning fired on one 5" log only ("needs ~146 Hz"). Only the coherent band is used now;
+  real stick moves rarely reach the crossover, so it falls back to 0.11 x the hover motor frequency (17-18 Hz on the
+  5", 26 Hz on the 3.5"; the model's hover crossovers are 19-20 and 28-29 Hz).
+- Chirp reconstruction: no numpy "invalid value" warning on an axis without stick input.
 
 ## 0.8.3
 From the first Windows session (Windows 11, Claude desktop app, Git Bash; a full tune of the 3.5" to PASS):
