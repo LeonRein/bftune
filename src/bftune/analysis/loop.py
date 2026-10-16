@@ -15,17 +15,17 @@ from ..model.plant import Plant
 @dataclass
 class LoopMetrics:
     fc: float  # gain crossover [Hz]
-    pm: float  # phase margin [deg]
-    gm_db: float  # gain margin [dB]: the smaller of the upward and downward margins (both >= 0 when stable)
+    pm: float  # phase margin [deg]: smallest angle to -1 over all gain crossovers, negative when unstable
+    gm_db: float  # gain margin [dB]: the smaller of the upward and downward margins (negative when unstable)
     f180: float  # frequency of the limiting -180° crossing
-    ms: float  # peak |S|
+    ms: float  # peak |S| (a margin only when ok)
     ms_hz: float
     mt: float  # peak |T|
     dm_ms: float  # delay margin [ms]
     bw_s: float  # disturbance-rejection bandwidth: first f with |S| >= -3 dB
     gm_up_db: float = float("inf")  # how much the loop gain may rise before instability
     gm_down_db: float = float("inf")  # how much it may fall (conditionally stable loops: I-term + lag at idle)
-    ok: bool = True
+    ok: bool = True  # closed loop stable (Nyquist)
 
     def as_dict(self) -> dict:
         return {k: float(v) if isinstance(v, (float, np.floating)) else v for k, v in self.__dict__.items()}
@@ -44,27 +44,18 @@ def metrics(f: np.ndarray, L: np.ndarray, f_min: float = 0.0) -> LoopMetrics:
     mag = np.abs(L)
     S = 1 / (1 + L)
     T = L * S
-    # gain crossover: last downward crossing of |L| = 1 (conservative if multiple)
-    idx = np.flatnonzero((mag[:-1] >= 1) & (mag[1:] < 1))
-    if len(idx) == 0:
-        fc, pm, dm = float("nan"), float("nan"), float("nan")
-    else:
-        k = idx[-1]
-        t = np.log(mag[k]) / (np.log(mag[k]) - np.log(mag[k + 1]))
-        fc = float(np.exp(np.log(f[k]) + t * (np.log(f[k + 1]) - np.log(f[k]))))
-        ph = np.unwrap(np.angle(L))
-        phc = ph[k] + t * (ph[k + 1] - ph[k])
-        # phase margin relative to the nearest -180 (mod 360)
-        pm = float(np.degrees(phc) + 180.0)
-        pm = (pm + 180.0) % 360.0 - 180.0
-        dm = pm / 360.0 / fc * 1000.0 if pm > 0 else 0.0
-    # gain margin: all crossings of the real axis on the negative side (Im L changes sign with Re L < 0)
+    # Nyquist: crossings of the negative real axis. With |L| > 1 (left of -1) the phase passing -180 downwards
+    # (Im L going - to +) circles -1 clockwise, upwards counter-clockwise. L has no right-half-plane poles, so the
+    # closed loop is stable iff these cancel. A dip below -180 that comes back (I-term + motor lag at idle) is
+    # conditionally stable; one that does not is unstable, and then |S| on the frequency axis (Ms) is no margin.
+    # Starting above the axis on the left (phase already below -180 at f[0]) counts as one clockwise crossing: the
+    # integrators' arc at infinity, or the part below f_min, has crossed it.
     im = L.imag
     cross = np.flatnonzero((np.sign(im[:-1]) != np.sign(im[1:])) & (L.real[:-1] < 0))
-    # A crossing with |L| < 1 limits how far the gain may RISE (g > 0 dB). A crossing with |L| > 1 (at low
-    # frequency in conditionally stable loops, e.g. I-term + motor lag at idle) limits how far it may FALL:
-    # its margin is -g. The old min-over-all-crossings reported that as a negative "GM" (looked unstable).
+    # A crossing with |L| < 1 limits how far the gain may RISE (g > 0 dB). A crossing with |L| > 1 limits how far
+    # it may FALL: its margin is -g.
     up, down, f_up, f_down = float("inf"), float("inf"), float("nan"), float("nan")
+    turns = int(L[0].real < 0 and im[0] > 0 and mag[0] > 1)
     for k in cross:
         t = im[k] / (im[k] - im[k + 1])
         re = L.real[k] + t * (L.real[k + 1] - L.real[k])
@@ -73,16 +64,40 @@ def metrics(f: np.ndarray, L: np.ndarray, f_min: float = 0.0) -> LoopMetrics:
             fk = float(f[k] + t * (f[k + 1] - f[k]))
             if g >= 0 and g < up:
                 up, f_up = g, fk
-            elif g < 0 and -g < down:
-                down, f_down = -g, fk
+            elif g < 0:
+                turns += 1 if im[k + 1] > im[k] else -1
+                if -g < down:
+                    down, f_down = -g, fk
+    stable = turns == 0
     gm, f180 = (up, f_up) if up <= down else (down, f_down)
+    if not stable:
+        gm = -gm  # the gain has to change by that much to (maybe) restore stability
+    # gain crossovers: every crossing of |L| = 1. PM is the smallest angle between L and -1 there (the Nyquist
+    # curve's distance to -1, wherever the phase has wrapped to), negative when the loop is unstable; the delay
+    # margin is the smallest extra lag that moves one of them onto -1. fc is the last downward crossing (bandwidth).
+    idx = np.flatnonzero((mag[:-1] >= 1) != (mag[1:] >= 1))
+    if len(idx) == 0:
+        fc, pm, dm = float("nan"), float("nan"), float("nan")
+    else:
+        lm = np.log(mag)
+        t = lm[idx] / (lm[idx] - lm[idx + 1])
+        fx = np.exp(np.log(f[idx]) + t * (np.log(f[idx + 1]) - np.log(f[idx])))
+        ph = np.unwrap(np.angle(L))
+        lag = (np.degrees(ph[idx] + t * (ph[idx + 1] - ph[idx])) + 180.0) % 360.0  # lag until -180, 0..360
+        pm = float(np.min(180.0 - np.abs(lag - 180.0)))
+        dn = np.flatnonzero(mag[idx] >= 1)
+        fc = float(fx[dn[-1]]) if len(dn) else float("nan")
+        if stable:
+            dm = float(np.min(lag / 360.0 / fx)) * 1000.0
+        else:
+            pm, dm = -pm, 0.0
     sm = np.abs(S)
     ks = int(np.argmax(sm))
     bw = np.flatnonzero(sm >= 1 / np.sqrt(2))
     bw_s = float(f[bw[0]]) if len(bw) else float("nan")
     return LoopMetrics(
         fc=fc, pm=pm, gm_db=gm, f180=f180, ms=float(sm[ks]), ms_hz=float(f[ks]), mt=float(np.max(np.abs(T))),
-        dm_ms=float(dm), bw_s=bw_s, gm_up_db=float(up), gm_down_db=float(down),
+        dm_ms=float(dm), bw_s=bw_s, gm_up_db=float(up), gm_down_db=float(down), ok=stable,
     )
 
 
