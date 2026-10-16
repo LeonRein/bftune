@@ -89,6 +89,11 @@ def sanity_warnings(fl: Flight, idn: Identification | None) -> list[str]:
     if part > 0.01:  # at full throttle (punch-outs) saturation is normal
         w.append(f"a motor is at its maximum for {100*part:.1f}% of the log below {100*part_thr:.0f}% throttle (authority "
                  "limit): check props/weight, P/D/FF, motor_output_limit")
+    if not fl.pid_logged:
+        w.append("PID fields not logged (blackbox_disable_pids = ON): pidsum reconstructed from the motor outputs (inverse "
+                 "quad-X mixer; samples with a clipped motor are not used for identification); per-term P/I/D/F unknown, "
+                 "so the D-term noise is not measured, the D-term chain check and the freestyle replay are skipped. "
+                 "Log them next time: set blackbox_disable_pids = OFF")
     if "motor_poles" not in fl.cfg.values:
         w.append("motor_poles is not in the log or dump (assumed 14): every motor frequency, RPM notch and idle case "
                  "depends on it - ask the pilot or take it from a `diff all`")
@@ -164,7 +169,7 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
     cl = closed_loop_check(fl, tune, idn)
     val = {"closed_loop": {AXES[a]: {"rms_db": c.rms_db, "rms_deg": c.rms_deg} for a, c in cl.items()}
            or "n/a (no chirp)", "replay": {}}
-    for a in idn.axes:
+    for a in idn.axes if fl.pid_logged else ():  # the replay needs the logged feedforward (axisF)
         rr = replay(fl, tune, idn, a)
         if rr is not None:
             val["replay"][AXES[a]] = {"fit_pct": rr.fit_pct, "windows": len(rr.windows)}
@@ -240,7 +245,7 @@ def analyze(log_path: str, dump_path: str | None, out: Path, log_index: int | No
         },
         "validation": val,
         "noise_bands": [{"throttle": b.throttle, "motor_hz": float(np.mean(b.motor_hz)),
-                         "measured_dterm_rms": np.sqrt(b.var_d).round(3).tolist(),
+                         "measured_dterm_rms": np.sqrt(b.var_d).round(3).tolist() if fl.pid_logged else None,
                          "measured_gyro_rms": np.sqrt(b.var_filt).round(3).tolist(),
                          "fit_error": b.calib_err.round(3).tolist()} for b in nm.bands],
         "predicted_motor_noise_current": None if pred is None else pred.motor_rms.round(3).tolist(),

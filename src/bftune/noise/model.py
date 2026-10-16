@@ -123,6 +123,8 @@ def measure(fl: Flight, n: int = 256, n_bands: int = 5, min_windows: int = 12,
         pu = np.stack([_welch_windows(fl.gyro_unfilt[:, a], sel, n) for a in range(3)]) * scale
         pf = np.stack([_welch_windows(fl.gyro[:, a], sel, n) for a in range(3)]) * scale
         pd = np.stack([_welch_windows(fl.D[:, a], sel, n) for a in range(3)]) * scale
+        if not fl.pid_logged:  # blackbox_disable_pids: D-term noise not measured (NaN, the fit skips it)
+            pd = np.full_like(pd, np.nan)
         idx = np.concatenate([np.arange(s, s + n) for s in sel])
         mhz = np.median(fl.motor_hz[idx], axis=0).tolist() if fl.motor_hz is not None else [0.0] * 4
         line_free = _line_free_mask(f, fl.fs, fl.motor_hz[idx] if fl.motor_hz is not None else None,

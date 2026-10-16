@@ -37,7 +37,9 @@ def freestyle_frf(fl: Flight, axis: int, seg_s: float = 2.0, min_sp_std: float =
     bi = np.digitize(f, edges) - 1
     inb = (bi >= 0) & (bi < nb)
     b_ = bi[inb]
-    sig = {"y": fl.gyro_unfilt[:, axis], "yf": fl.gyro[:, axis], "u": fl.pidsum[:, axis], "D": fl.D[:, axis]}
+    sig = {"y": fl.gyro_unfilt[:, axis], "yf": fl.gyro[:, axis], "u": fl.pidsum[:, axis]}
+    if fl.pid_logged:
+        sig["D"] = fl.D[:, axis]
     S = {k: np.zeros(nb, complex) for k in sig}
     P = {k: np.zeros(nb) for k in sig}
     Szz = np.zeros(nb)

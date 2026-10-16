@@ -45,6 +45,11 @@ class Flight:
     debug: np.ndarray  # (N,8)
     mode_mask: np.ndarray  # (N,) rcModeActivationMask
     extras: dict = field(default_factory=dict)
+    # blackbox_disable_pids = ON: no axisP/I/D/F in the log (P/I/D/F stay zero, the per-term values are unknown);
+    # pidsum is then reconstructed from the motor outputs, invalid where `mixer_clipped`
+    pid_logged: bool = True
+    pidsum_motors: np.ndarray | None = None
+    mixer_clipped: np.ndarray | None = None
 
     @property
     def n(self) -> int:
@@ -52,7 +57,7 @@ class Flight:
 
     @property
     def pidsum(self) -> np.ndarray:
-        return self.P + self.I + self.D + self.F
+        return self.P + self.I + self.D + self.F if self.pidsum_motors is None else self.pidsum_motors
 
     def mode(self, box: int) -> np.ndarray:
         return (self.mode_mask >> box) & 1 == 1
@@ -110,6 +115,43 @@ def motor_saturated(fl: Flight) -> np.ndarray:
         return np.zeros(fl.n, bool)
     lim = fl.cfg.int("motor_output_limit", 100) / 100.0 if fl.cfg is not None else 1.0
     return np.any(fl.motor >= 0.995 * lim, axis=1)
+
+
+# mixerQuadX (betaflight/src/main/flight/mixer_init.c): motor 0..3 = REAR_R, FRONT_R, REAR_L, FRONT_L; columns
+# roll, pitch, yaw. The blackbox logs motor[] in this mixer order (motor_output_reordering only remaps the output
+# pins in the platform motor drivers, e.g. platform/STM32/dshot_bitbang.c).
+QUAD_X = np.array([[-1, 1, -1], [-1, -1, 1], [1, 1, 1], [1, -1, -1]], float)
+
+
+def pidsum_from_motors(fl: Flight) -> tuple[np.ndarray, np.ndarray]:
+    """(pidsum (N,3), clipped (N,)) reconstructed by inverting the quad-X mixer (mixer.c mixTable/applyMixToMotors).
+
+    Betaflight: motor = motorOutputMin + range * TL(thr + sum_axes pidsum/1000 * mixer[axis]), TL =
+    pidApplyThrustLinearization (pid.c), yaw pidsum negated unless yaw_motors_reversed (taken from the data), mix scaled by
+    scaleAirmodeTransition (0.5 + throttle) below 50 % throttle when airmode is off (applyMixerAdjustment).
+    The throttle term cancels in the per-axis projection. Not modelled (the gain is then a few % low): the
+    dynamic-idle raise of motorOutputMin and vbat_sag_compensation's lower motorRangeMax. `clipped` marks
+    samples where the inversion is invalid: a motor at the end of its range or the mix normalised
+    (motorMixRange > 1).
+    """
+    lo, hi = (fl.log.header_ints("motorOutput") or [0, 2047])[:2]
+    e = fl.cfg.int("thrust_linear", 0) / 100.0
+    xs = np.linspace(0.0, 1.0, 4001)
+    x = np.interp(np.clip(fl.motor, 0, 1), xs * (1 + e * (1 - xs) * (1 + e * (1 - 2 * xs))), xs)
+    u = 1000.0 * (x @ QUAD_X) / 4.0
+    if not (fl.log.header_int("features", 1 << 22) >> 22) & 1:  # FEATURE_AIRMODE (config/feature.h)
+        u /= np.clip(0.5 + fl.throttle, 0.5, 1.0)[:, None]
+    clipped = np.any((fl.motor_raw <= lo + 1) | (fl.motor_raw >= hi - 1), axis=1) | (np.ptp(x, axis=1) > 0.98)
+    # yaw_motors_reversed (the yaw sign) is not in the log header: take each axis' sign from the data. P acts on
+    # the tracking error, so the high-passed pidsum follows the high-passed setpoint - gyro.
+    from scipy.ndimage import uniform_filter1d
+
+    k = max(1, int(0.05 * fl.fs))
+    err = fl.setpoint - fl.gyro
+    ok = fl.mode(BOX_ARM) & ~clipped
+    corr = np.sum((u - uniform_filter1d(u, k, axis=0))[ok] * (err - uniform_filter1d(err, k, axis=0))[ok], axis=0)
+    u *= np.where(corr < 0, -1.0, 1.0)
+    return u, clipped
 
 
 def exclude(fl: Flight, windows: list[tuple[float, float]]) -> Flight:
@@ -181,7 +223,7 @@ def flight_from_log(log: Log, cfg: Config) -> Flight:
     debug = np.stack([col(f"debug[{i}]") if log.has(f"debug[{i}]") else np.zeros(len(t)) for i in range(8)], axis=1)
     throttle = col("setpoint[3]") / 1000.0 if log.has("setpoint[3]") else (rc[:, 3] - 1000) / 1000
 
-    return Flight(
+    fl = Flight(
         log=log,
         cfg=cfg,
         t=t,
@@ -203,7 +245,11 @@ def flight_from_log(log: Log, cfg: Config) -> Flight:
         rc=rc,
         debug=debug,
         mode_mask=_mode_mask_per_frame(log),
+        pid_logged=log.has("axisP[0]"),
     )
+    if not fl.pid_logged and fl.motor.shape[1] == 4:
+        fl.pidsum_motors, fl.mixer_clipped = pidsum_from_motors(fl)
+    return fl
 
 
 @dataclass

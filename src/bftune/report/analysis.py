@@ -66,7 +66,7 @@ def write_analysis_report(out: Path, an, summary: dict) -> Path:
     bands = summary.get("noise_bands") or []
     if bands:
         doc.table(["throttle", "motor Hz", "D-term RMS r/p/y", "gyro RMS r/p/y", "model fit error r/p/y"],
-                  [[round(b["throttle"], 2), round(b["motor_hz"]), " / ".join(f"{x:.2f}" for x in b["measured_dterm_rms"]),
+                  [[round(b["throttle"], 2), round(b["motor_hz"]), " / ".join(f"{x:.2f}" for x in b["measured_dterm_rms"] or []) or "not logged",
                     " / ".join(f"{x:.2f}" for x in b["measured_gyro_rms"]), " / ".join(f"{x:.2f}" for x in b["fit_error"])]
                    for b in bands])
         doc.p("The noise model predicts these levels for any filter/D setting; fit error > 1 means less certain "

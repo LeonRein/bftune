@@ -39,6 +39,8 @@ def saturation_mask(fl: Flight, sl: slice) -> np.ndarray:
     ok = np.all((mr > lo + 1) & (mr < hi - 1), axis=1) if mr.size else np.ones(sl.stop - sl.start, bool)
     lim = np.array([fl.cfg.int("pidsum_limit", 500), fl.cfg.int("pidsum_limit", 500), fl.cfg.int("pidsum_limit_yaw", 400)])
     ok &= np.all(np.abs(fl.pidsum[sl]) < 0.98 * lim, axis=1)
+    if fl.mixer_clipped is not None:  # pidsum reconstructed from the motors: invalid where the mixer clipped
+        ok &= ~fl.mixer_clipped[sl]
     return ok
 
 
@@ -129,17 +131,11 @@ def plant_frf(fl: Flight, runs: list[ChirpRun], axis: int, edges: np.ndarray | N
     Responses returned (all relative to pidSum 'u'):
       y   : gyroUnfilt           -> G
       yf  : gyroADC (filtered)   -> G * Fg
-      P, D: logged P and D terms -> G * Fg * (Kp) and G * Fg * Fd * Kd*TPA*diff
+      P, D: logged P and D terms -> G * Fg * (Kp) and G * Fg * Fd * Kd*TPA*diff (only if the PID fields are logged)
       r   : setpoint             -> G / T_ry
     """
     sel = [r for r in runs if r.axis == axis]
-    sig = {
-        "u": fl.pidsum[:, axis],
-        "y": fl.gyro_unfilt[:, axis],
-        "yf": fl.gyro[:, axis],
-        "P": fl.P[:, axis],
-        "D": fl.D[:, axis],
-        "I": fl.I[:, axis],
-        "r": fl.setpoint[:, axis],
-    }
+    sig = {"u": fl.pidsum[:, axis], "y": fl.gyro_unfilt[:, axis], "yf": fl.gyro[:, axis], "r": fl.setpoint[:, axis]}
+    if fl.pid_logged:
+        sig.update(P=fl.P[:, axis], D=fl.D[:, axis], I=fl.I[:, axis])
     return estimate(fl, sel, sig, reference="u", edges=edges)
