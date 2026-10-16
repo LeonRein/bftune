@@ -65,10 +65,13 @@ scaled by `chirp_amplitude_*` and is **added to the rate setpoint** of one axis.
 ## Plant and identification
 - Instrument-variable FRF: G = S_zy/S_zu with z = excitation, u = pidSum, y = gyroUnfilt.
 - Parametric fit on log-FRF residuals weighted by coherence; structure chosen by AIC.
-- Motor model: ARX(1) of eRPM vs motor command × Vbat (the voltage the motor sees) per speed bin →
+- Motor model: per speed bin, g·e^(−sTd)/(τs+1) fitted to the measured frequency response motor command × Vbat
+  (the voltage the motor sees) → eRPM over 3-60 Hz (Welch, 0.5 s windows, coherence-weighted) →
   τ(ω) = 1/(c0 + c1ω) and the authority ω·dω/dcmd (per unit command at the voltage flown at that speed);
   used to reschedule K and τ to other throttle points. Bins above the best-sampled one whose lag is >1.25×
-  longer are dropped (the lag only shortens with speed).
+  longer are dropped (the lag only shortens with speed). Above the corner the response is g/(τs): torque per volt
+  over rotor inertia, which the logs show flat across speed (3.5": 28-31k Hz/s per unit command from 200 to 500 Hz;
+  5": 19-22k), so the plant's high-frequency gain scales with ω.
 
 ## Noise model
 See `noise/model.py`. Decimation preserves variance. A smooth 8 kHz gyro-noise spectrum is fitted so

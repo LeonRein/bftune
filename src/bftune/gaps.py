@@ -1,6 +1,6 @@
 """Blackbox gaps: frames the logger dropped (device too slow for the log rate, corrupt sections the decoder skipped).
 
-Data across a gap is not continuous: no FFT window, filter or ARX fit may span one. The frame just before a gap
+Data across a gap is not continuous: no FFT window or filter may span one. The frame just before a gap
 can itself be corrupt (decoded from a damaged stream), so both frames around a gap are treated as unusable.
 """
 

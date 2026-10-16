@@ -11,8 +11,9 @@ ESC applies duty x Vbat to the motor, and the sag during punch-outs otherwise re
 flown at that speed (sag included), as the throttle cases use it.
 
 and the time constant falls with speed (linearized motor + prop load):
-1/tau = c0 + c1*omega. We fit an ARX(1) model per speed bin on the logged 1 kHz
-data (command and eRPM are sampled in the same PID iteration), then fit c0, c1.
+1/tau = c0 + c1*omega. Per speed bin the model is fitted to the measured frequency response
+command -> eRPM (Welch, 3-60 Hz; command and eRPM are sampled in the same PID iteration), then c0, c1.
+Above the corner the response is g/(tau s): torque per volt over inertia, the same at every speed.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.ndimage import uniform_filter1d
+from scipy.optimize import least_squares
 
 from ..flight import Flight
 from ..gaps import segments as gap_free_segments
@@ -35,7 +37,7 @@ class MotorModel:
     n: np.ndarray  # samples per bin
     c0: float  # 1/tau = c0 + c1*hz
     c1: float
-    r2: np.ndarray
+    r2: np.ndarray  # mean coherence of the fitted band per bin
 
     g0: float = 0.0  # gain(hz) = g0 + g1*hz  [motor Hz per unit command]
     g1: float = 0.0
@@ -69,30 +71,38 @@ class MotorModel:
         return "\n".join(rows)
 
 
-def _arx_fit(cmd: np.ndarray, hz: np.ndarray, d: int):
-    """y[k] = a y[k-1] + b u[k-1-d] + c ; segments given as list of (u, y) arrays."""
-    X, Y = [], []
-    for u, y in zip(cmd, hz):
-        if len(y) < d + 5:
+def _bin_frf(us: list, ys: list, nfft: int, fs: float):
+    """Welch H1 = S_uy/S_uu and coherence over windows that lie wholly in the bin (command is exact: H1 is unbiased)."""
+    w = np.hanning(nfft)
+    suu = suy = syy = 0.0
+    for u, y in zip(us, ys):
+        if len(y) < nfft:
             continue
-        m = len(y) - d - 1
-        X.append(np.column_stack([y[d : d + m], u[:m], np.ones(m)]))
-        Y.append(y[d + 1 :])
-    if not X:
+        idx = np.arange(0, len(y) - nfft + 1, nfft // 4)[:, None] + np.arange(nfft)
+        U = np.fft.rfft((u[idx] - u[idx].mean(axis=1, keepdims=True)) * w, axis=1)
+        Y = np.fft.rfft((y[idx] - y[idx].mean(axis=1, keepdims=True)) * w, axis=1)
+        suu, suy, syy = suu + np.sum(np.abs(U) ** 2, 0), suy + np.sum(np.conj(U) * Y, 0), syy + np.sum(np.abs(Y) ** 2, 0)
+    if np.isscalar(suu):
         return None
-    X = np.vstack(X)
-    Y = np.concatenate(Y)
-    coef, res, *_ = np.linalg.lstsq(X, Y, rcond=None)
-    pred = X @ coef
-    r2 = 1 - np.sum((Y - pred) ** 2) / max(np.sum((Y - Y.mean()) ** 2), 1e-12)
-    return coef, r2, len(Y)
+    return np.fft.rfftfreq(nfft, 1 / fs), suy / np.maximum(suu, 1e-12), np.abs(suy) ** 2 / np.maximum(suu * syy, 1e-12)
 
 
-def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min_samples: int = 3000,
-                    bin_by_s: float = 0.2, max_rise: float = 1.25) -> MotorModel | None:
+def _fit_lag(f: np.ndarray, H: np.ndarray, coh: np.ndarray) -> tuple[float, float, float]:
+    """g e^{-s Td}/(tau s + 1) fitted to the FRF (relative complex error, weighted by coherence) -> (g, tau, Td)."""
+    s, w = 2j * np.pi * f, np.sqrt(coh)
+
+    def res(p):
+        e = (p[0] * np.exp(-s * p[2]) / (p[1] * s + 1) - H) / np.abs(H) * w
+        return np.concatenate([e.real, e.imag])
+
+    g0 = float(np.abs(H[0]))
+    return tuple(least_squares(res, [g0, 0.02, 0.001], bounds=([0, 1e-3, 0], [np.inf, 0.3, 0.02])).x)
+
+
+def identify_motors(fl: Flight, n_bins: int = 8, min_samples: int = 3000, bin_by_s: float = 0.2,
+                    max_rise: float = 1.25, f_band: tuple = (3.0, 60.0)) -> MotorModel | None:
     if fl.motor_hz is None or fl.motor.shape[1] == 0:
         return None
-    ts = 1.0 / fl.fs
     armed = fl.mode(0)
     hz_all = fl.motor_hz
     lo, hi = np.percentile(hz_all[armed], [2, 99.5])
@@ -105,14 +115,11 @@ def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min
     chunks = [(fl.motor[a:b, m] * volts[a:b], hz_all[a:b, m], uniform_filter1d(hz_all[a:b, m], max(1, int(bin_by_s * fl.fs))),
                volts[a:b]) for a, b in gap_free_segments(fl, armed, 201) for m in range(hz_all.shape[1])]
 
-    # pick the transport delay that maximizes fit over all data
-    best_d, best_r2 = 0, -np.inf
-    for d in range(max_delay_samples + 1):
-        out = _arx_fit([c[0] for c in chunks], [c[1] for c in chunks], d)
-        if out and out[1] > best_r2:
-            best_d, best_r2 = d, out[1]
-
-    centers, taus, gains, ns, r2s = [], [], [], [], []
+    # the lag is read where it matters for the rate loop (a few Hz to past the crossover), from windows of ~0.5 s;
+    # an equation-error ARX(1) at the log rate was dominated by the high frequencies and missed d(rpm)/d(cmd) above
+    # the motor corner, which is set by the motor alone (torque per volt / inertia), by up to 2x per bin
+    nfft = int(2 ** np.round(np.log2(0.5 * fl.fs)))
+    centers, taus, gains, ns, r2s, delays = [], [], [], [], [], []
     for k in range(n_bins):
         us, ys, vs = [], [], []
         for u, y, ym, v in chunks:
@@ -120,32 +127,29 @@ def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min
             # split into contiguous in-bin chunks
             cut = np.flatnonzero(np.diff(np.concatenate([[0], inb.astype(int), [0]])))
             for s, e in zip(cut[::2], cut[1::2]):
-                if e - s > 20:
+                if e - s >= nfft:
                     us.append(u[s:e])
                     ys.append(y[s:e])
                     vs.append(v[s:e])
         n = sum(len(y) for y in ys)
-        if n < min_samples:
+        if n < min_samples or (frf := _bin_frf(us, ys, nfft, fl.fs)) is None:
             continue
-        out = _arx_fit(us, ys, best_d)
-        if out is None:
-            continue
-        (a_, b_, _c), r2, nn = out
-        if not (0 < a_ < 1) or b_ <= 0:
-            continue
-        tau = -ts / np.log(a_)
-        gain = b_ / (1 - a_) * float(np.mean(np.concatenate(vs)))  # per unit duty at this speed's voltage
+        f, H, coh = frf
+        m = (f >= f_band[0]) & (f <= min(f_band[1], 0.25 * fl.fs))
+        g, tau, td = _fit_lag(f[m], H[m], coh[m])
+        gain = g * float(np.mean(np.concatenate(vs)))  # per unit duty at this speed's voltage
         centers.append(np.sqrt(edges[k] * edges[k + 1]))
         taus.append(tau)
         gains.append(gain)
-        ns.append(nn)
-        r2s.append(r2)
+        ns.append(n)
+        r2s.append(float(np.mean(coh[m])))
+        delays.append(td)
     # physically the lag shortens with speed: a bin above the best-sampled one with a clearly longer lag comes from
     # large-signal data (punch-outs: current limit, sag) or disturbance-dominated airflow, not the small-signal lag
     if centers:
         ref = taus[int(np.argmax(ns))]
         keep = [i for i in range(len(centers)) if centers[i] <= centers[int(np.argmax(ns))] or taus[i] <= max_rise * ref]
-        centers, taus, gains, ns, r2s = ([v[i] for i in keep] for v in (centers, taus, gains, ns, r2s))
+        centers, taus, gains, ns, r2s, delays = ([v[i] for i in keep] for v in (centers, taus, gains, ns, r2s, delays))
     if len(centers) < 2:
         return None
     centers, taus = np.array(centers), np.array(taus)
@@ -164,7 +168,7 @@ def identify_motors(fl: Flight, n_bins: int = 8, max_delay_samples: int = 4, min
         bins_hz=centers,
         tau=taus,
         gain=np.array(gains),
-        delay=best_d * ts,
+        delay=float(np.median(delays)),
         n=np.array(ns),
         c0=float(c0),
         c1=float(c1),

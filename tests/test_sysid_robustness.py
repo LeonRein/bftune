@@ -11,25 +11,39 @@ from bftune.sysid.motor import MotorModel, identify_motors
 FS = 1000.0
 
 
-def _motor_flight(tau_of_hz, sag, seed=0, n=240_000):
-    """One motor: first-order lag on the applied voltage cmd x Vbat; the battery sags with the command (~100 ms)."""
+def _motor_flight(tau_of_hz, sag, seed=0, n=240_000, tau2=0.0, noise_hz=0.5):
+    """One motor: first-order lag on the applied voltage cmd x Vbat; the battery sags with the command (~100 ms).
+    Optional: a fast second lag tau2 (ESC, prop) and eRPM telemetry noise [Hz rms]."""
     rng = np.random.default_rng(seed)
     hold = rng.integers(500, 2000, n // 500)
     lv = np.repeat(0.15 + 0.8 * rng.beta(2, 3, hold.size), hold)[:n]  # mostly cruising, some punch-outs
     u = np.clip(lfilter([0.02], [1, -0.98], lv, zi=[0.5 * 0.98])[0] + 0.03 * rng.standard_normal(n), 0, 1)
     v = 1 - sag * lfilter([0.01], [1, -0.99], u, zi=[0.5 * 0.99])[0]
+    x = lfilter([1 / (1 + tau2 * FS)], [1, -tau2 * FS / (1 + tau2 * FS)], u * v) if tau2 else u * v
     hz = np.empty(n)
     hz[0] = 300.0
     for k in range(n - 1):
-        hz[k + 1] = hz[k] + (600.0 * u[k] * v[k] - hz[k]) / FS / tau_of_hz(hz[k])
+        hz[k + 1] = hz[k] + (600.0 * x[k] - hz[k]) / FS / tau_of_hz(hz[k])
     return SimpleNamespace(n=n, fs=FS, t=np.arange(n) / FS, motor=u[:, None], vbat=16.0 * v, mode=lambda i: np.ones(n, bool),
-                           motor_hz=hz[:, None] + 0.5 * rng.standard_normal((n, 1)))
+                           motor_hz=hz[:, None] + noise_hz * rng.standard_normal((n, 1)))
 
 
 def test_motor_lag_is_not_biased_by_battery_sag():
     # c6 read 46-57 ms at 350-450 Hz (~25 ms elsewhere): the sag during punch-outs is not in the logged command
     m0, m = (identify_motors(_motor_flight(lambda hz: 0.025, sag=s)) for s in (0.0, 0.3))
     np.testing.assert_allclose(m.tau, m0.tau, rtol=0.1)  # was up to 22 % short
+
+
+def test_motor_lag_holds_under_telemetry_noise_and_a_fast_second_lag():
+    # m4 (3.5"): ARX(1) read 33 ms at hover and 14 ms at 412 Hz, so the scheduled d(rpm)/d(cmd) above the motor
+    # corner (g/tau: torque per volt / inertia, measured flat 28-31k at every speed) rose 2.3x and the mid-throttle
+    # PM fell from 44 to 23 deg; the ARX gave 2-8 ms with 5 Hz eRPM noise and ~50 ms with a 3 ms second lag
+    tau = lambda hz: 1 / (20 + 0.1 * hz)  # noqa: E731
+    for kw in ({"noise_hz": 5.0}, {"tau2": 0.003}):
+        m = identify_motors(_motor_flight(tau, sag=0.0, seed=2, **kw))
+        np.testing.assert_allclose(m.tau, tau(m.bins_hz) + kw.get("tau2", 0.0), rtol=0.25)
+        hf = m.gain / m.tau
+        assert hf.max() / hf.min() < 1.6 * (m.bins_hz.max() * 0.1 + 20) / (m.bins_hz.min() * 0.1 + 20)
 
 
 def test_motor_bins_slower_than_the_best_sampled_one_at_higher_speed_are_rejected():

@@ -32,6 +32,13 @@ reproduced on real logs and now regression tests:
   roll P of 32 instead of 44. The lag is now fitted on command × Vbat (28 ms; robust to vbat timing and smoothing),
   bins above the best-sampled one with a >1.25x longer lag are dropped, and the motor-vs-axis tau note also checks
   the faster speed bins.
+- **Motor lag fit:** the per-bin ARX(1) at the log rate was dominated by the high frequencies (eRPM noise, a fast
+  ESC/prop lag) and erred by up to 2x per bin in either direction. On the 3.5" it read 33 ms at hover and 14 ms at
+  412 Hz, so the scheduled d(rpm)/d(cmd) above the motor corner rose 2.3x towards mid throttle where the log shows
+  it flat (28-31k at every speed): the flown tune, which flies clean at mid/high throttle, got mid PM 23 deg
+  (10 deg robust). The lag is now fitted per bin to the measured command -> eRPM frequency response over 3-60 Hz
+  (3.5": 20 -> 16 ms from hover to 495 Hz, matching the chirp's 18-20 ms; mid PM 50 deg, 43 robust). The 5" mid
+  case gets 4-7 deg less PM than with the ARX (its high-speed bins had read too slow).
 - **Control bandwidth** (`flight_profile.control_bandwidth_hz`, which scales diagnose bands, the noise model and the
   "coherent band only up to" warning) read the setpoint -> gyro phase where the sticks have no power: 113, 20 and
   9 Hz on three logs, so the warning fired on one 5" log only ("needs ~146 Hz"). Only the coherent band is used now;

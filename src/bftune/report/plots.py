@@ -145,7 +145,7 @@ def motor_model_plot(motor, path: Path) -> Path | None:
     if motor is None:
         return None
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.plot(motor.bins_hz, motor.tau * 1000, "o", color=C_MEAS, label="per speed bin (ARX)")
+    ax.plot(motor.bins_hz, motor.tau * 1000, "o", color=C_MEAS, label="per speed bin (FRF fit)")
     hz = np.linspace(motor.bins_hz.min() * 0.8, motor.bins_hz.max() * 1.1, 100)
     ax.plot(hz, motor.tau_at(hz) * 1000, color=C_NEW, label="fit 1/τ = c0 + c1·f")
     ax.set_xlabel("motor speed [Hz]")
