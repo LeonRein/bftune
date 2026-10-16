@@ -29,6 +29,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from ..flight import Flight
+from ..gaps import continuous
 from ..model.controller import OperatingPoint, controller_fr
 from ..model.params import Tune
 from ..sysid.chirp import find_chirps
@@ -101,7 +102,7 @@ def _hf_var(f: np.ndarray, psd_bin: np.ndarray, fs: float, motion_hz: float = MO
 def measure(fl: Flight, n: int = 256, n_bands: int = 5, min_windows: int = 12,
             motion_hz: float = MOTION_HZ) -> list[BandNoise]:
     """Measure noise spectra per throttle band on armed, non-chirp data."""
-    ok = fl.mode(0).copy()
+    ok = fl.mode(0) & continuous(fl)  # no window may span a blackbox gap
     for r in find_chirps(fl):
         ok[r.start : r.end] = False
     starts = np.arange(0, fl.n - n, n // 2)

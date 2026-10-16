@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.4
+From an independent comparison with a second tool on the same two quads (a 5" and a 3.5"); all four findings
+reproduced on real logs and now regression tests:
+- **Logs without PID fields** (`blackbox_disable_pids = ON`): pidsum was all zeros, so identification failed with a
+  misleading "not coherent or motors saturated". pidsum is now reconstructed from the logged motor outputs by
+  inverting the quad-X mixer and thrust_linear (mixer.c); samples with a motor at the end of its range are dropped,
+  the yaw sign comes from the data. Code that needs the separate P/I/D/F terms (D-term noise, the D-term chain check,
+  the freestyle replay) says "not logged" instead of using zeros; `inspect`, `analyze` and the brief warn and give
+  the fix. (The reconstruction ignores dynamic idle's floor and battery sag compensation: gains may read a few % low.)
+- **thrust_linear scheduling:** the identified gain holds the flown tune's curve slope at the identification
+  throttle, but the search divided by the slope at the case throttle. With thrust_linear 40 this overestimated the
+  plant at mid throttle ~1.4x and made a good tune look unsafe (PM 17 deg instead of 36 deg), driving large P/D cuts.
+  The log replay now applies the same factor.
+- **Loop margins:** stability is decided by the Nyquist encirclement count; PM is the smallest angle to -1 over all
+  crossovers (negative when unstable), GM is negative when unstable, DM the smallest added delay that reaches -1.
+  An unstable robustness case had been reported with GM +5.7 dB. No verdict of the stored analyses changed.
+- **Blackbox gaps** (SD card too slow, corrupt sections): data across a gap is never treated as continuous
+  (`gaps.py`: motor fit, chirp detection, freestyle windows, diagnose, stick profile, spectra, stall detection, noise
+  model). Chirp rounds touching a gap are skipped and every round must be coherent on its own, so one bad round no
+  longer sets the gain uncertainty (it read +-298 %). The motor fit bins by 0.2 s mean speed, which removes a short
+  time-constant bias on hover logs with a narrow speed range.
+
 ## 0.8.3
 From the first Windows session (Windows 11, Claude desktop app, Git Bash; a full tune of the 3.5" to PASS):
 - The launcher didn't find a winget-installed uv (its `WinGet\Links` folder isn't on the agent's PATH). It now

@@ -689,7 +689,7 @@ class Workbench:
             entry = {
                 "throttle": round(b.throttle, 3),
                 "motor_hz": round(float(np.mean(b.motor_hz)), 1),
-                "measured_dterm_rms": np.sqrt(b.var_d).round(2).tolist(),
+                "measured_dterm_rms": None if np.isnan(b.var_d).all() else np.sqrt(b.var_d).round(2).tolist(),  # PID fields not logged
                 "measured_gyro_rms": np.sqrt(b.var_filt).round(3).tolist(),
                 "fit_error": b.calib_err.round(2).tolist(),
                 "non_rpm_peaks": sorted(peaks, key=lambda x: -x["db_above_floor"])[:6],
